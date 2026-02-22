@@ -143,11 +143,20 @@ function M.setup(user_opts)
   if _cfg.auto_attach then
     local group = vim.api.nvim_create_augroup("JupytextRender", { clear = true })
 
-    vim.api.nvim_create_autocmd({ "BufReadPost", "FileType" }, {
+    -- Direct .py files: BufReadPost fires after file is loaded
+    vim.api.nvim_create_autocmd("BufReadPost", {
       group   = group,
       pattern = "*.py",
       callback = function(ev)
-        -- Defer slightly so filetype detection has run
+        vim.defer_fn(function() try_attach(ev.buf) end, 0)
+      end,
+    })
+    -- jupytext .ipynb files: buffer name stays *.ipynb but filetype becomes python;
+    -- FileType pattern must be the filetype name, not a file glob
+    vim.api.nvim_create_autocmd("FileType", {
+      group   = group,
+      pattern = "python",
+      callback = function(ev)
         vim.defer_fn(function() try_attach(ev.buf) end, 0)
       end,
     })

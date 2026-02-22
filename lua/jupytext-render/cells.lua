@@ -35,13 +35,18 @@ function M.scan(buf)
   return cells
 end
 
---- Return true if the buffer contains at least one jupytext cell marker.
+--- Return true if the buffer looks like a jupytext Python file.
+--- Matches either: # %% cell markers, or the # --- jupytext YAML header.
 ---@param buf integer
 ---@return boolean
 function M.is_jupytext(buf)
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   for _, line in ipairs(lines) do
     if line:match("^# %%%%") or line:match("^# In%[") then
+      return true
+    end
+    -- jupytext YAML frontmatter header (# --- at top of file)
+    if line:match("^# jupyter:") then
       return true
     end
   end
