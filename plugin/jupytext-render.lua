@@ -1,0 +1,4 @@
+-- Auto-sourced entry point for jupytext-render.nvim.
+-- This file intentionally does nothing on its own; rendering only activates
+-- after the user calls require("jupytext-render").setup() in their config.
+-- This follows the lazy-init pattern used by most modern Neovim plugins.
