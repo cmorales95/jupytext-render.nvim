@@ -4,6 +4,7 @@ local config     = require("jupytext-render.config")
 local cells      = require("jupytext-render.cells")
 local extmarks   = require("jupytext-render.extmarks")
 local injections = require("jupytext-render.injections")
+local navigation = require("jupytext-render.navigation")
 
 local _cfg   = nil
 local _state = {}
@@ -128,18 +129,34 @@ function M.debug()
   local marks   = extmarks.mark_count(buf)
   local rm_ok   = pcall(require, "render-markdown")
 
+  -- Check render-markdown file_types includes python
+  local rm_has_python = false
+  local state_ok, rm_state = pcall(require, "render-markdown.state")
+  if state_ok and rm_state.config and rm_state.config.file_types then
+    rm_has_python = vim.tbl_contains(rm_state.config.file_types, "python")
+  end
+
+  -- Check treesitter parsers
+  local ts_py = pcall(vim.treesitter.get_parser, buf, "python")
+  local ts_md_ok, nvim_ts = pcall(require, "nvim-treesitter.parsers")
+  local ts_md = ts_md_ok and nvim_ts.has_parser("markdown")
+
   local info = {
     "── jupytext-render debug ──",
-    "buf:          " .. buf,
-    "name:         " .. vim.fn.fnamemodify(name, ":t"),
-    "filetype:     " .. ft,
-    "is_jupytext:  " .. tostring(is_jt),
-    "setup done:   " .. tostring(cfg_ok),
-    "state:        " .. vim.inspect(state),
-    "cells found:  " .. #scanned,
-    "extmarks set: " .. marks,
-    "conceallevel: " .. cl,
-    "render-md:    " .. tostring(rm_ok),
+    "buf:              " .. buf,
+    "name:             " .. vim.fn.fnamemodify(name, ":t"),
+    "filetype:         " .. ft,
+    "is_jupytext:      " .. tostring(is_jt),
+    "setup done:       " .. tostring(cfg_ok),
+    "state:            " .. vim.inspect(state),
+    "cells found:      " .. #scanned,
+    "extmarks set:     " .. marks,
+    "conceallevel:     " .. cl,
+    "render-md:        " .. tostring(rm_ok),
+    "render-md python: " .. tostring(rm_has_python)
+      .. (rm_ok and not rm_has_python and " ← MISSING (run :JupytextRenderDebug after reopening)" or ""),
+    "ts python parser: " .. tostring(ts_py),
+    "ts markdown:      " .. tostring(ts_md),
   }
   for i, c in ipairs(scanned) do
     table.insert(info, ("  cell[%d] type=%-8s lines %d-%d"):format(i, c.type, c.start, c.stop))
@@ -154,10 +171,68 @@ function M.setup(user_opts)
   define_highlights()
   injections.setup(_cfg)
 
-  if _cfg.keymaps and _cfg.keymaps.toggle and _cfg.keymaps.toggle ~= "" then
-    vim.keymap.set("n", _cfg.keymaps.toggle, function()
+  local nk = _cfg.keymaps or {}
+  if nk.toggle and nk.toggle ~= "" then
+    vim.keymap.set("n", nk.toggle, function()
       M.toggle()
     end, { desc = "Toggle jupytext markdown rendering", silent = true })
+  end
+  if nk.next_cell and nk.next_cell ~= "" then
+    vim.keymap.set("n", nk.next_cell, function() navigation.goto_next() end,
+      { desc = "Jump to next Jupyter cell", silent = true })
+  end
+  if nk.prev_cell and nk.prev_cell ~= "" then
+    vim.keymap.set("n", nk.prev_cell, function() navigation.goto_prev() end,
+      { desc = "Jump to previous Jupyter cell", silent = true })
+  end
+
+  -- molten-nvim integration keymaps
+  local mk = _cfg.molten and _cfg.molten.keymaps or {}
+  if mk.init_kernel and mk.init_kernel ~= "" then
+    vim.keymap.set("n", mk.init_kernel, ":MoltenInit<CR>",
+      { desc = "Initialize Jupyter kernel", silent = true })
+  end
+  if mk.show_output and mk.show_output ~= "" then
+    vim.keymap.set("n", mk.show_output, ":MoltenShowOutput<CR>",
+      { desc = "Show Jupyter cell output", silent = true })
+  end
+  if mk.run_line and mk.run_line ~= "" then
+    vim.keymap.set("n", mk.run_line, ":MoltenEvaluateLine<CR>",
+      { desc = "Run current line in Jupyter kernel", silent = true })
+  end
+  if mk.run_cell and mk.run_cell ~= "" then
+    vim.keymap.set("n", mk.run_cell, function()
+      local buf  = vim.api.nvim_get_current_buf()
+      local cell = navigation.current_cell(buf)
+      if not cell then
+        vim.notify("jupytext-render: cursor is not inside a cell", vim.log.levels.WARN)
+        return
+      end
+      if cell.type == "markdown" then
+        vim.notify("jupytext-render: cannot run a markdown cell", vim.log.levels.WARN)
+        return
+      end
+      -- cell.start is the # %% marker line (0-indexed); skip it.
+      -- MoltenEvaluateRange uses 1-indexed line numbers.
+      local first = cell.start + 2  -- skip marker, 1-indexed
+      local last  = cell.stop  + 1  -- 1-indexed
+      if first > last then return end
+      vim.cmd(string.format("%d,%dMoltenEvaluateRange", first, last))
+    end, { desc = "Run current Jupyter cell", silent = true })
+  end
+  if mk.run_all and mk.run_all ~= "" then
+    vim.keymap.set("n", mk.run_all, function()
+      local buf = vim.api.nvim_get_current_buf()
+      for _, cell in ipairs(cells.scan(buf)) do
+        if cell.type == "code" then
+          local first = cell.start + 2
+          local last  = cell.stop  + 1
+          if first <= last then
+            vim.cmd(string.format("%d,%dMoltenEvaluateRange", first, last))
+          end
+        end
+      end
+    end, { desc = "Run all Jupyter code cells", silent = true })
   end
 
   vim.api.nvim_create_user_command("JupytextRenderDebug", function() M.debug() end,

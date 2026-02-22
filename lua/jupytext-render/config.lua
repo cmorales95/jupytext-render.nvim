@@ -3,7 +3,9 @@ local M = {}
 M.defaults = {
   render_markdown = true,
   keymaps = {
-    toggle = "<leader>mM",
+    toggle    = "<leader>mM",
+    next_cell = "]j",
+    prev_cell = "[j",
   },
   highlights = {
     cell_bg = "JupytextMDCell",
@@ -16,6 +18,18 @@ M.defaults = {
   conceal_marker = true,
   auto_attach    = true,
   debounce_ms    = 150,
+  -- molten-nvim integration keymaps.
+  -- All default to "" (disabled) to avoid conflicting with keymaps you may
+  -- already have in your own config.  Set any key to a binding to enable it.
+  molten = {
+    keymaps = {
+      init_kernel  = "",
+      run_cell     = "",
+      run_line     = "",
+      show_output  = "",
+      run_all      = "",
+    },
+  },
 }
 
 --- Merge user opts into defaults (shallow merge of top-level keys, deep for nested)
