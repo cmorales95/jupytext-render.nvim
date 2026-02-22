@@ -86,6 +86,7 @@ local function try_attach(buf)
 
   _state[buf] = { enabled = true, timer = nil }
   extmarks.render(buf, _cfg)
+  injections.enable_render_markdown(buf)
   subscribe_text_events(buf)
 end
 
@@ -99,6 +100,7 @@ function M.enable(buf)
   end
   _state[buf].enabled = true
   extmarks.render(buf, _cfg)
+  injections.enable_render_markdown(buf)
 end
 
 --- Disable rendering for a buffer.
@@ -108,6 +110,7 @@ function M.disable(buf)
   cancel_timer(buf)
   if _state[buf] then _state[buf].enabled = false end
   extmarks.clear(buf)
+  injections.disable_render_markdown(buf)
 end
 
 --- Toggle rendering for a buffer.
