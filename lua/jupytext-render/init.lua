@@ -5,20 +5,14 @@ local cells      = require("jupytext-render.cells")
 local extmarks   = require("jupytext-render.extmarks")
 local injections = require("jupytext-render.injections")
 
--- Resolved config (set on setup())
-local _cfg = nil
-
--- Per-buffer state: { [buf] = { enabled=bool, timer=uv_timer|nil } }
+local _cfg   = nil
 local _state = {}
 
---- Define default highlight groups (overridable by colorscheme).
 local function define_highlights()
   vim.api.nvim_set_hl(0, "JupytextMDCell", { link = "CursorLine", default = true })
   vim.api.nvim_set_hl(0, "JupytextMDSep",  { link = "Comment",    default = true })
 end
 
---- Cancel any pending debounce timer for a buffer.
----@param buf integer
 local function cancel_timer(buf)
   local s = _state[buf]
   if s and s.timer then
@@ -28,12 +22,10 @@ local function cancel_timer(buf)
   end
 end
 
---- Schedule a debounced render for the buffer.
----@param buf integer
 local function debounced_render(buf)
   if not _state[buf] or not _state[buf].enabled then return end
   cancel_timer(buf)
-  local timer = vim.uv and vim.uv.new_timer() or vim.loop.new_timer()
+  local timer = (vim.uv or vim.loop).new_timer()
   _state[buf].timer = timer
   timer:start(_cfg.debounce_ms, 0, vim.schedule_wrap(function()
     if vim.api.nvim_buf_is_valid(buf) and _state[buf] and _state[buf].enabled then
@@ -43,29 +35,36 @@ local function debounced_render(buf)
   end))
 end
 
---- Subscribe TextChanged events for live re-render.
----@param buf integer
 local function subscribe_text_events(buf)
   local group = vim.api.nvim_create_augroup("JupytextRender_buf" .. buf, { clear = true })
   vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
-    buffer  = buf,
-    group   = group,
+    buffer   = buf,
+    group    = group,
     callback = function() debounced_render(buf) end,
   })
   vim.api.nvim_create_autocmd("BufWritePost", {
-    buffer  = buf,
-    group   = group,
+    buffer   = buf,
+    group    = group,
     callback = function()
       if _state[buf] and _state[buf].enabled then
         extmarks.render(buf, _cfg)
       end
     end,
   })
-  -- Clean up state when buffer is deleted
+  -- Re-apply conceallevel whenever the buffer enters a new window
+  vim.api.nvim_create_autocmd("BufWinEnter", {
+    buffer   = buf,
+    group    = group,
+    callback = function()
+      if _state[buf] and _state[buf].enabled then
+        extmarks.render(buf, _cfg)
+      end
+    end,
+  })
   vim.api.nvim_create_autocmd("BufDelete", {
-    buffer  = buf,
-    group   = group,
-    once    = true,
+    buffer   = buf,
+    group    = group,
+    once     = true,
     callback = function()
       cancel_timer(buf)
       _state[buf] = nil
@@ -74,15 +73,12 @@ local function subscribe_text_events(buf)
   })
 end
 
---- Try to attach rendering to a buffer (guards: filetype=python, has # %% markers).
----@param buf integer
 local function try_attach(buf)
   if not _cfg or not _cfg.auto_attach then return end
   if not vim.api.nvim_buf_is_valid(buf) then return end
   if vim.bo[buf].filetype ~= "python" then return end
   if not cells.is_jupytext(buf) then return end
-  -- Already attached?
-  if _state[buf] then return end
+  if _state[buf] then return end -- already attached
 
   _state[buf] = { enabled = true, timer = nil }
   extmarks.render(buf, _cfg)
@@ -90,8 +86,6 @@ local function try_attach(buf)
   subscribe_text_events(buf)
 end
 
---- Enable rendering for a buffer.
----@param buf? integer  defaults to current buffer
 function M.enable(buf)
   buf = buf or vim.api.nvim_get_current_buf()
   if not _state[buf] then
@@ -103,8 +97,6 @@ function M.enable(buf)
   injections.enable_render_markdown(buf)
 end
 
---- Disable rendering for a buffer.
----@param buf? integer  defaults to current buffer
 function M.disable(buf)
   buf = buf or vim.api.nvim_get_current_buf()
   cancel_timer(buf)
@@ -113,8 +105,6 @@ function M.disable(buf)
   injections.disable_render_markdown(buf)
 end
 
---- Toggle rendering for a buffer.
----@param buf? integer  defaults to current buffer
 function M.toggle(buf)
   buf = buf or vim.api.nvim_get_current_buf()
   if _state[buf] and _state[buf].enabled then
@@ -124,50 +114,85 @@ function M.toggle(buf)
   end
 end
 
---- Main setup entry point.
----@param user_opts table|nil
+--- Print diagnostic info for the current buffer.
+function M.debug()
+  local buf = vim.api.nvim_get_current_buf()
+  local name = vim.api.nvim_buf_get_name(buf)
+  local ft   = vim.bo[buf].filetype
+  local loaded = vim.api.nvim_buf_is_loaded(buf)
+  local is_jt  = cells.is_jupytext(buf)
+  local state  = _state[buf]
+  local cfg_ok = _cfg ~= nil
+
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, 4, false)
+
+  local info = {
+    "── jupytext-render debug ──",
+    "buf:        " .. buf,
+    "name:       " .. name,
+    "filetype:   " .. ft,
+    "loaded:     " .. tostring(loaded),
+    "is_jupytext:" .. tostring(is_jt),
+    "setup done: " .. tostring(cfg_ok),
+    "state:      " .. vim.inspect(state),
+    "first 4 lines:",
+  }
+  for i, l in ipairs(lines) do
+    table.insert(info, "  [" .. i .. "] " .. l)
+  end
+
+  -- Check render-markdown
+  local rm_ok, _ = pcall(require, "render-markdown")
+  table.insert(info, "render-markdown available: " .. tostring(rm_ok))
+
+  vim.notify(table.concat(info, "\n"), vim.log.levels.INFO, { title = "jupytext-render" })
+end
+
 function M.setup(user_opts)
   _cfg = config.merge(user_opts)
 
   define_highlights()
   injections.setup(_cfg)
 
-  -- Register toggle keymap if configured
   if _cfg.keymaps and _cfg.keymaps.toggle and _cfg.keymaps.toggle ~= "" then
     vim.keymap.set("n", _cfg.keymaps.toggle, function()
       M.toggle()
     end, { desc = "Toggle jupytext markdown rendering", silent = true })
   end
 
-  -- Auto-attach autocmds
+  vim.api.nvim_create_user_command("JupytextRenderDebug", function() M.debug() end,
+    { desc = "Print jupytext-render diagnostic info for current buffer" })
+
   if _cfg.auto_attach then
     local group = vim.api.nvim_create_augroup("JupytextRender", { clear = true })
 
-    -- Direct .py files: BufReadPost fires after file is loaded
+    -- .py files opened directly
     vim.api.nvim_create_autocmd("BufReadPost", {
       group   = group,
       pattern = "*.py",
       callback = function(ev)
-        vim.defer_fn(function() try_attach(ev.buf) end, 0)
+        vim.schedule(function() try_attach(ev.buf) end)
       end,
     })
-    -- jupytext .ipynb files: buffer name stays *.ipynb but filetype becomes python;
-    -- FileType pattern must be the filetype name, not a file glob
+
+    -- any buffer that becomes python filetype (includes jupytext .ipynb conversion)
     vim.api.nvim_create_autocmd("FileType", {
       group   = group,
       pattern = "python",
       callback = function(ev)
-        vim.defer_fn(function() try_attach(ev.buf) end, 0)
+        vim.schedule(function() try_attach(ev.buf) end)
       end,
     })
 
-    -- Also attach to already-open python buffers
-    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-      if vim.api.nvim_buf_is_loaded(buf)
-        and vim.bo[buf].filetype == "python" then
-        vim.defer_fn(function() try_attach(buf) end, 0)
+    -- catch buffers already open when plugin loads (e.g. session restore)
+    -- use a small delay so jupytext's async conversion has time to finish
+    vim.defer_fn(function()
+      for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+        if vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].filetype == "python" then
+          try_attach(buf)
+        end
       end
-    end
+    end, 200)
   end
 end
 
