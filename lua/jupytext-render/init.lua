@@ -116,34 +116,34 @@ end
 
 --- Print diagnostic info for the current buffer.
 function M.debug()
-  local buf = vim.api.nvim_get_current_buf()
+  local buf  = vim.api.nvim_get_current_buf()
+  local win  = vim.api.nvim_get_current_win()
   local name = vim.api.nvim_buf_get_name(buf)
   local ft   = vim.bo[buf].filetype
-  local loaded = vim.api.nvim_buf_is_loaded(buf)
-  local is_jt  = cells.is_jupytext(buf)
-  local state  = _state[buf]
-  local cfg_ok = _cfg ~= nil
-
-  local lines = vim.api.nvim_buf_get_lines(buf, 0, 4, false)
+  local is_jt   = cells.is_jupytext(buf)
+  local state   = _state[buf]
+  local cfg_ok  = _cfg ~= nil
+  local cl      = vim.wo[win].conceallevel
+  local scanned = cells.scan(buf)
+  local marks   = extmarks.mark_count(buf)
+  local rm_ok   = pcall(require, "render-markdown")
 
   local info = {
     "── jupytext-render debug ──",
-    "buf:        " .. buf,
-    "name:       " .. name,
-    "filetype:   " .. ft,
-    "loaded:     " .. tostring(loaded),
-    "is_jupytext:" .. tostring(is_jt),
-    "setup done: " .. tostring(cfg_ok),
-    "state:      " .. vim.inspect(state),
-    "first 4 lines:",
+    "buf:          " .. buf,
+    "name:         " .. vim.fn.fnamemodify(name, ":t"),
+    "filetype:     " .. ft,
+    "is_jupytext:  " .. tostring(is_jt),
+    "setup done:   " .. tostring(cfg_ok),
+    "state:        " .. vim.inspect(state),
+    "cells found:  " .. #scanned,
+    "extmarks set: " .. marks,
+    "conceallevel: " .. cl,
+    "render-md:    " .. tostring(rm_ok),
   }
-  for i, l in ipairs(lines) do
-    table.insert(info, "  [" .. i .. "] " .. l)
+  for i, c in ipairs(scanned) do
+    table.insert(info, ("  cell[%d] type=%-8s lines %d-%d"):format(i, c.type, c.start, c.stop))
   end
-
-  -- Check render-markdown
-  local rm_ok, _ = pcall(require, "render-markdown")
-  table.insert(info, "render-markdown available: " .. tostring(rm_ok))
 
   vim.notify(table.concat(info, "\n"), vim.log.levels.INFO, { title = "jupytext-render" })
 end
