@@ -14,19 +14,16 @@ M._injection_query = [[
 
 --- Enable render-markdown.nvim on a specific buffer, if available.
 ---
---- We invalidate the treesitter query cache first so that the injection
---- registered by render-markdown's setup() (via vim.treesitter.query.set)
---- is picked up.  Then we force a full re-parse to build injection sub-trees.
---- A small defer lets render-markdown run its render pass after the injection
---- sub-tree exists.
+--- Ensures the injection is registered, forces a full treesitter re-parse
+--- to build injection sub-trees, then defers render-markdown's enable pass.
 ---@param buf integer
 function M.enable_render_markdown(buf)
   local ok, render_md = pcall(require, "render-markdown")
   if not ok then return end
 
-  -- Invalidate cached Python queries so treesitter picks up the
-  -- injection registered by render-markdown's setup().
-  pcall(vim.treesitter.query.invalidate, "python")
+  -- Ensure injection is registered (may have been cleared by a later
+  -- render-markdown setup() call or parser cache refresh).
+  M._ensure_injection()
 
   -- Force full re-parse to build injection sub-trees.
   local ts_ok, parser = pcall(vim.treesitter.get_parser, buf, "python")
@@ -57,44 +54,62 @@ end
 --- Plugin-level setup: register our markdown injection and ensure
 --- render-markdown.nvim will process Python buffers.
 ---
---- We use render-markdown's `injections` API which internally calls
---- vim.treesitter.query.set() — this bypasses the treesitter file cache
---- entirely, fixing the VeryLazy timing issue where the Python parser
---- caches injection queries before our plugin is on the runtimepath.
+--- Patches render-markdown's state directly instead of re-calling setup()
+--- (which would reset user config to defaults via resolve_config()).
 ---@param cfg table
 function M.setup(cfg)
   vim.schedule(function()
-    local ok, render_md = pcall(require, "render-markdown")
+    local ok = pcall(require, "render-markdown")
     if not ok then
-      -- Fallback: no render-markdown, register injection directly
       M._register_injection_fallback()
       return
     end
 
-    local opts = {}
-
-    -- Ensure Python is in file_types
-    local current_fts = { "markdown" }
     local state_ok, rm_state = pcall(require, "render-markdown.state")
-    if state_ok and rm_state.config and rm_state.config.file_types then
-      current_fts = rm_state.config.file_types
-    end
-    if not vim.tbl_contains(current_fts, "python") then
-      opts.file_types = vim.list_extend(vim.deepcopy(current_fts), { "python" })
+    if not state_ok or not rm_state.file_types then
+      -- render-markdown not initialized yet; register injection directly
+      M._register_injection_fallback()
+      return
     end
 
-    -- Register our markdown injection via render-markdown's injections API.
-    -- render-markdown calls vim.treesitter.query.set() internally, which
-    -- bypasses the treesitter file cache — fixing the VeryLazy timing issue.
-    opts.injections = {
-      python = {
-        enabled = true,
-        query = M._injection_query,
-      },
-    }
+    -- Patch state directly (avoids re-calling setup which resets user config)
+    if not vim.tbl_contains(rm_state.file_types, "python") then
+      table.insert(rm_state.file_types, "python")
+    end
+    rm_state.injections = rm_state.injections or {}
+    rm_state.injections.python = { enabled = true, query = M._injection_query }
 
-    pcall(render_md.setup, opts)
+    -- Call ts.inject("python") which calls vim.treesitter.query.set() internally
+    local ts_ok, rm_ts = pcall(require, "render-markdown.core.ts")
+    if ts_ok and rm_ts.inject then
+      rm_ts.inject("python")
+    else
+      M._register_injection_fallback()
+    end
   end)
+end
+
+--- Check if the injection query is registered and re-register if missing.
+function M._ensure_injection()
+  local query_ok, query = pcall(vim.treesitter.query.get, "python", "injections")
+  if query_ok and query then
+    local source = query:source()
+    if type(source) == "string" and source:find("injection.combined", 1, true) then
+      return -- already registered
+    end
+  end
+  -- Not registered; try render-markdown's ts.inject first, fall back to direct
+  local ts_ok, rm_ts = pcall(require, "render-markdown.core.ts")
+  if ts_ok and rm_ts.inject then
+    -- Ensure state has our injection config
+    local state_ok, rm_state = pcall(require, "render-markdown.state")
+    if state_ok and rm_state.injections then
+      rm_state.injections.python = { enabled = true, query = M._injection_query }
+    end
+    rm_ts.inject("python")
+  else
+    M._register_injection_fallback()
+  end
 end
 
 --- Fallback when render-markdown.nvim is not installed.

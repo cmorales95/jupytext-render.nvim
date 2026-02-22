@@ -132,14 +132,41 @@ function M.debug()
   -- Check render-markdown file_types includes python
   local rm_has_python = false
   local state_ok, rm_state = pcall(require, "render-markdown.state")
-  if state_ok and rm_state.config and rm_state.config.file_types then
-    rm_has_python = vim.tbl_contains(rm_state.config.file_types, "python")
+  if state_ok then
+    -- Check both state.file_types (patched directly) and state.config.file_types
+    if rm_state.file_types then
+      rm_has_python = vim.tbl_contains(rm_state.file_types, "python")
+    elseif rm_state.config and rm_state.config.file_types then
+      rm_has_python = vim.tbl_contains(rm_state.config.file_types, "python")
+    end
   end
 
   -- Check treesitter parsers
   local ts_py = pcall(vim.treesitter.get_parser, buf, "python")
   local ts_md_ok, nvim_ts = pcall(require, "nvim-treesitter.parsers")
   local ts_md = ts_md_ok and nvim_ts.has_parser("markdown")
+
+  -- Check injection query
+  local inj_query_ok, inj_query = pcall(vim.treesitter.query.get, "python", "injections")
+  local has_md_injection = false
+  if inj_query_ok and inj_query then
+    local src = inj_query:source()
+    has_md_injection = type(src) == "string" and src:find("injection.combined", 1, true) ~= nil
+  end
+
+  -- Check parser has markdown children
+  local has_md_children = false
+  if ts_py then
+    local p_ok, p = pcall(vim.treesitter.get_parser, buf, "python")
+    if p_ok and p then
+      local children = p:children()
+      has_md_children = children and children["markdown"] ~= nil
+    end
+  end
+
+  -- Check navigation keymaps
+  local nj = vim.fn.maparg("]j", "n")
+  local pj = vim.fn.maparg("[j", "n")
 
   local info = {
     "── jupytext-render debug ──",
@@ -157,6 +184,12 @@ function M.debug()
       .. (rm_ok and not rm_has_python and " ← MISSING (run :JupytextRenderDebug after reopening)" or ""),
     "ts python parser: " .. tostring(ts_py),
     "ts markdown:      " .. tostring(ts_md),
+    "inj query set:    " .. tostring(has_md_injection)
+      .. (not has_md_injection and " ← MISSING" or ""),
+    "inj md children:  " .. tostring(has_md_children)
+      .. (not has_md_children and " ← MISSING" or ""),
+    "keymap ]j:        " .. (nj ~= "" and "set" or "NOT SET"),
+    "keymap [j:        " .. (pj ~= "" and "set" or "NOT SET"),
   }
   for i, c in ipairs(scanned) do
     table.insert(info, ("  cell[%d] type=%-8s lines %d-%d"):format(i, c.type, c.start, c.stop))
