@@ -40,11 +40,17 @@ luarocks --lua-version 5.1 install magick
 ```lua
 {
   "cmorales95/jupytext-render.nvim",
-  ft           = { "python" },
+  event        = "VeryLazy",
   dependencies = { "MeanderingProgrammer/render-markdown.nvim" },  -- optional
   opts         = {},
 },
 ```
+
+> **Note:** Use `event = "VeryLazy"` rather than `ft = { "python" }`. Lazy-loading on
+> filetype causes a race condition: when a `.ipynb` file is opened via jupytext.nvim,
+> the `FileType python` event fires before this plugin has loaded, so the first buffer
+> is never rendered. `VeryLazy` loads the plugin shortly after startup and the
+> "already-open buffers" scan in `setup()` catches any buffers that opened first.
 
 ### Recommended full setup (with molten + jupytext)
 

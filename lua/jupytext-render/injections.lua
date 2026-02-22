@@ -1,14 +1,15 @@
 local M = {}
 
 --- Enable render-markdown.nvim on a specific buffer, if available.
---- The treesitter injection (queries/python/injections.scm) handles
---- the language injection; this just activates render-markdown's rendering
---- engine for the given buffer.
+--- Uses nvim_buf_call to ensure render-markdown's enable() runs in the
+--- correct buffer context regardless of what the current buffer is.
 ---@param buf integer
 function M.enable_render_markdown(buf)
   local ok, render_md = pcall(require, "render-markdown")
   if not ok then return end
-  pcall(render_md.enable, buf)
+  pcall(vim.api.nvim_buf_call, buf, function()
+    pcall(render_md.enable)
+  end)
 end
 
 --- Disable render-markdown.nvim on a specific buffer.
@@ -16,7 +17,9 @@ end
 function M.disable_render_markdown(buf)
   local ok, render_md = pcall(require, "render-markdown")
   if not ok then return end
-  pcall(render_md.disable, buf)
+  pcall(vim.api.nvim_buf_call, buf, function()
+    pcall(render_md.disable)
+  end)
 end
 
 --- Plugin-level setup: nothing to do here since the treesitter injection
