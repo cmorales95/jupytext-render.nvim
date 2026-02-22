@@ -40,6 +40,7 @@ luarocks --lua-version 5.1 install magick
 ```lua
 {
   "cmorales95/jupytext-render.nvim",
+  main         = "jupytext-render",   -- required: lazy.nvim needs explicit module name
   event        = "VeryLazy",
   dependencies = { "MeanderingProgrammer/render-markdown.nvim" },  -- optional
   opts         = {},
@@ -56,6 +57,7 @@ luarocks --lua-version 5.1 install magick
 
 ```lua
 -- 1. Kernel execution
+-- (add molten-nvim, jupytext.nvim specs here)
 {
   "benlubas/molten-nvim",
   version      = "^1.0.0",
@@ -80,7 +82,8 @@ luarocks --lua-version 5.1 install magick
 -- 3. Markdown cell rendering (this plugin)
 {
   "cmorales95/jupytext-render.nvim",
-  ft           = { "python" },
+  main         = "jupytext-render",
+  event        = "VeryLazy",
   dependencies = { "MeanderingProgrammer/render-markdown.nvim" },
   opts = {
     keymaps = { toggle = "<leader>mM" },
