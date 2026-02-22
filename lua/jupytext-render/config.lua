@@ -22,6 +22,7 @@ M.defaults = {
   -- All default to "" (disabled) to avoid conflicting with keymaps you may
   -- already have in your own config.  Set any key to a binding to enable it.
   molten = {
+    output_split = false, -- open molten output in a right vsplit
     keymaps = {
       init_kernel  = "",
       run_cell     = "",

@@ -17,7 +17,7 @@ Follows conventional commits (`feat:`, `fix:`, `docs:`) and semantic versioning.
 ### Rendering Pipeline
 
 1. **Detection** (`cells.lua`) — scans buffer for `# %%` markers, returns `{start, stop, type}` tuples (0-indexed)
-2. **Treesitter Injection** (`queries/python/injections.scm`) — injects markdown language into Python comment nodes, strips `# ` prefix via `#offset! 0 2 0 0`
+2. **Treesitter Injection** (`injections.lua`) — registers a treesitter query via render-markdown's `injections` API (which calls `vim.treesitter.query.set()` internally), injecting markdown language into Python comment nodes and stripping the `# ` prefix via `#offset! 0 2 0 0`. Falls back to direct `query.set()` if render-markdown is not installed.
 3. **Extmarks** (`extmarks.lua`) — applies borders (virtual lines), conceals `# ` prefix and marker lines, sets background highlights per cell. All in namespace `"jupytext_render"`, cleared and rebuilt on every render pass.
 4. **render-markdown.nvim** — reads the injected markdown sub-trees and renders headings, bold, tables, etc.
 
@@ -37,8 +37,8 @@ init.lua (API, events, lifecycle)
 The plugin typically loads lazily (`event = "VeryLazy"`) but the Python buffer opens earlier via jupytext. Three mechanisms handle this race:
 
 - **200ms deferred scan** in `setup()` catches already-open buffers
-- **`parser:parse(true)`** in `enable_render_markdown()` forces treesitter to pick up `queries/python/injections.scm` that just arrived on the runtimepath
-- **80ms defer** before `render_md.enable()` lets injection sub-trees populate first
+- **`vim.treesitter.query.invalidate("python")`** in `enable_render_markdown()` clears the cached query so treesitter picks up the injection registered by render-markdown's `setup()`. Followed by `parser:invalidate(true)` + `parser:parse(true)` for a full re-parse.
+- **100ms defer** before `render_md.enable()` lets injection sub-trees populate first
 
 ### Buffer State
 
@@ -51,7 +51,9 @@ Must be set to `2` on ALL windows showing the buffer (not just current). `BufWin
 ## Non-Obvious Details
 
 - **Molten keymaps default to `""`** (disabled) to avoid overwriting user's existing molten bindings. Opt-in only.
-- **`injections.lua` `setup()` auto-patches** render-markdown's `file_types` to include `"python"` if missing, using `vim.schedule` to run after the user's own render-markdown config.
+- **`injections.lua` `setup()` uses render-markdown's `injections` API** to register the treesitter query (bypassing the file cache), and auto-patches `file_types` to include `"python"` if missing. Uses `vim.schedule` to run after the user's own render-markdown config. If render-markdown is absent, falls back to `vim.treesitter.query.set()` directly.
+- **`queries/python/injections.scm` was removed** — the injection is now registered programmatically to avoid double-injection issues and the VeryLazy file-cache timing bug.
+- **`molten.output_split`** defaults to `false`. When enabled, sets `vim.g.molten_output_win_style = "split"`, `vim.g.molten_split_direction = "right"`, and `vim.g.molten_split_size = 40` for a right-side vsplit output layout.
 - **Cell detection Lua patterns**: `^# %%%%` is the Lua literal for matching `# %%` (percent must be escaped).
 - **`extmarks.render()` clears the entire namespace first** — no incremental updates, full rebuild each pass.
 - **`run_cell` line math**: `cell.start` is 0-indexed marker line, so first executable line = `cell.start + 2` (skip marker + convert to 1-indexed) for `MoltenEvaluateRange`.
