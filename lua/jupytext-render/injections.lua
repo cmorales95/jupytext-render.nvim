@@ -196,17 +196,16 @@ function M.enable_render_markdown(buf)
   -- Refresh cell cache so the predicate has up-to-date line mappings.
   cells.update_cache(buf)
 
-  -- Force full re-parse to build injection sub-trees.
+  -- Patch the Python parser BEFORE the initial parse so that when the
+  -- injection creates the bounding-box markdown child, our monkey-patch
+  -- immediately fixes the regions — preventing stale markdown highlights
+  -- from ever appearing on code cell lines.
   local ts_ok, parser = pcall(vim.treesitter.get_parser, buf, "python")
   if ts_ok and parser then
+    M._patch_parser(buf)
     parser:invalidate(true)
-    parser:parse(true)
+    parser:parse(true)  -- monkey-patch fires → _fix_markdown_regions runs
   end
-
-  -- Fix injection regions for Neovim 0.11+ (bounding-box → per-line ranges)
-  -- and patch parsers so future re-parses also get correct regions.
-  M._fix_markdown_regions(buf)
-  M._patch_parser(buf)
 
   -- Defer enable so injection trees are populated before render pass.
   vim.defer_fn(function()

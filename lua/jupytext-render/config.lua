@@ -12,8 +12,9 @@ M.defaults = {
     sep     = "JupytextMDSep",
   },
   border = {
-    top    = "── markdown ──────────────────────",
-    bottom = "──────────────────────────────────",
+    top      = "── markdown ──────────────────────",
+    bottom   = "──────────────────────────────────",
+    code_top = "── code ──────────────────────────",
   },
   conceal_marker = true,
   auto_attach    = true,

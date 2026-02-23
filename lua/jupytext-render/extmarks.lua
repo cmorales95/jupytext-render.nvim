@@ -3,16 +3,6 @@ local cells = require("jupytext-render.cells")
 
 local NS = vim.api.nvim_create_namespace("jupytext_render")
 
--- Heading background highlights from render-markdown.nvim (fallback to DiffText etc.)
-local HEADING_BG = {
-  "RenderMarkdownH1Bg", "RenderMarkdownH2Bg", "RenderMarkdownH3Bg",
-  "RenderMarkdownH4Bg", "RenderMarkdownH5Bg", "RenderMarkdownH6Bg",
-}
-local HEADING_FG = {
-  "RenderMarkdownH1", "RenderMarkdownH2", "RenderMarkdownH3",
-  "RenderMarkdownH4", "RenderMarkdownH5", "RenderMarkdownH6",
-}
-
 ---@return table[]  virt_lines entry
 local function make_border_vline(text, hl)
   return { { text, hl } }
@@ -100,6 +90,30 @@ function M.render(buf, cfg)
             line_hl_group = bg_hl,
           })
         end
+      end
+
+      -- Bottom border virtual line after last body line
+      vim.api.nvim_buf_set_extmark(buf, NS, cell.stop, 0, {
+        virt_lines = { make_border_vline(cfg.border.bottom, sep_hl) },
+      })
+
+    elseif cell.type == "code" then
+      -- Top border virtual line above marker
+      vim.api.nvim_buf_set_extmark(buf, NS, cell.start, 0, {
+        virt_lines_above = true,
+        virt_lines = { make_border_vline(cfg.border.code_top or cfg.border.bottom, sep_hl) },
+      })
+
+      -- Conceal the marker line (# %%)
+      if cfg.conceal_marker then
+        local marker = vim.api.nvim_buf_get_lines(buf, cell.start, cell.start + 1, false)[1] or ""
+        vim.api.nvim_buf_set_extmark(buf, NS, cell.start, 0, {
+          end_row  = cell.start,
+          end_col  = #marker,
+          conceal  = "",
+          hl_group = sep_hl,
+          line_hl_group = sep_hl,
+        })
       end
 
       -- Bottom border virtual line after last body line
