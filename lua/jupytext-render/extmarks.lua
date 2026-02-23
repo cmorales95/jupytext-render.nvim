@@ -3,6 +3,16 @@ local cells = require("jupytext-render.cells")
 
 local NS = vim.api.nvim_create_namespace("jupytext_render")
 
+-- Heading background highlights from render-markdown.nvim (fallback to DiffText etc.)
+local HEADING_BG = {
+  "RenderMarkdownH1Bg", "RenderMarkdownH2Bg", "RenderMarkdownH3Bg",
+  "RenderMarkdownH4Bg", "RenderMarkdownH5Bg", "RenderMarkdownH6Bg",
+}
+local HEADING_FG = {
+  "RenderMarkdownH1", "RenderMarkdownH2", "RenderMarkdownH3",
+  "RenderMarkdownH4", "RenderMarkdownH5", "RenderMarkdownH6",
+}
+
 ---@return table[]  virt_lines entry
 local function make_border_vline(text, hl)
   return { { text, hl } }
@@ -69,16 +79,39 @@ function M.render(buf, cfg)
         local line = vim.api.nvim_buf_get_lines(buf, lnum, lnum + 1, false)[1] or ""
 
         if line:match("^# ") then
-          -- Conceal the "# " prefix (2 chars)
-          vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
-            end_row = lnum,
-            end_col = 2,
-            conceal = "",
-          })
-          -- Full-line background highlight
-          vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
-            line_hl_group = bg_hl,
-          })
+          -- Check for heading: "# ## Text" → h2, "# ### Text" → h3, etc.
+          local hashes = line:match("^# (#+) ")
+          if hashes then
+            local level = math.min(#hashes, 6)
+            -- Conceal "# ### " prefix (comment prefix + heading markers + space)
+            local conceal_end = 2 + #hashes + 1  -- "# " + hashes + " "
+            vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+              end_row = lnum,
+              end_col = math.min(conceal_end, #line),
+              conceal = "",
+            })
+            -- Heading background (full line)
+            vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+              line_hl_group = HEADING_BG[level],
+            })
+            -- Heading foreground on the text
+            vim.api.nvim_buf_set_extmark(buf, NS, lnum, math.min(conceal_end, #line), {
+              end_row = lnum,
+              end_col = #line,
+              hl_group = HEADING_FG[level],
+            })
+          else
+            -- Regular comment line: conceal "# " prefix
+            vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+              end_row = lnum,
+              end_col = 2,
+              conceal = "",
+            })
+            -- Full-line background highlight
+            vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+              line_hl_group = bg_hl,
+            })
+          end
         elseif line == "#" then
           vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
             end_row = lnum,
