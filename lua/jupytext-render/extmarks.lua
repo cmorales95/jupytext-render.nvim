@@ -189,11 +189,23 @@ local function render_table_data_row(content, bg_hl)
     else
       local next_pipe = content:find("|", col, true) or (#content + 1)
       local cell_text = content:sub(col, next_pipe - 1)
+      local cell_width = vim.fn.strdisplaywidth(cell_text)
+
       local segments = parse_inline_md(cell_text)
       local sv = segments_to_virt_text(segments, bg_hl)
+
+      -- Measure formatted width
+      local fmt_width = 0
       for _, chunk in ipairs(sv) do
+        fmt_width = fmt_width + vim.fn.strdisplaywidth(chunk[1])
         table.insert(virt, chunk)
       end
+
+      -- Pad cell to original width so pipes stay aligned with borders
+      if fmt_width < cell_width then
+        table.insert(virt, { string.rep(" ", cell_width - fmt_width), bg_hl })
+      end
+
       col = next_pipe
     end
   end
