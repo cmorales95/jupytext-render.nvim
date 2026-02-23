@@ -22,6 +22,7 @@ M._injection_query = [[
 ]]
 
 local _predicate_registered = false
+local _patched_parsers = {}
 
 --- Register the custom treesitter predicate `is-in-markdown-cell?`.
 --- Only registers once; safe to call multiple times.
@@ -54,6 +55,63 @@ function M._register_injection()
     ";; extends\n" .. M._injection_query)
 end
 
+--- Build correct per-line included regions for the markdown child parser.
+--- Works around Neovim 0.11+ where injection.combined creates a single
+--- bounding-box region instead of individual per-node ranges.
+---@param buf integer
+function M._fix_markdown_regions(buf)
+  local ts_ok, parser = pcall(vim.treesitter.get_parser, buf, "python")
+  if not ts_ok or not parser then return end
+
+  local md = parser:children()["markdown"]
+  if not md then return end
+
+  local buf_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local ranges = {}
+  local cell_list = cells.scan(buf)
+  for _, cell in ipairs(cell_list) do
+    if cell.type == "markdown" then
+      for lnum = cell.start + 1, cell.stop do
+        local line = buf_lines[lnum + 1] or "" -- buf_lines is 1-indexed
+        if line:match("^# ") then
+          table.insert(ranges, { lnum, 2, lnum, #line })
+        end
+      end
+    end
+  end
+
+  if #ranges > 0 then
+    md:set_included_regions({ ranges })
+    md:invalidate(true)
+    md:parse(true)
+  end
+end
+
+--- Monkey-patch the Python parser's parse method to fix markdown injection
+--- regions after each parse pass. Ensures render-markdown always sees correct
+--- trees even when it triggers its own re-parses.
+---@param buf integer
+function M._patch_parser(buf)
+  local ts_ok, parser = pcall(vim.treesitter.get_parser, buf, "python")
+  if not ts_ok or not parser then return end
+
+  if _patched_parsers[buf] == parser then return end
+  _patched_parsers[buf] = parser
+
+  local orig_parse = parser.parse
+  parser.parse = function(self, ...)
+    local result = orig_parse(self, ...)
+    M._fix_markdown_regions(buf)
+    return result
+  end
+end
+
+--- Clean up patched parser reference for a buffer.
+---@param buf integer
+function M._cleanup(buf)
+  _patched_parsers[buf] = nil
+end
+
 --- Enable render-markdown.nvim on a specific buffer, if available.
 ---
 --- Registers the injection, forces a full treesitter re-parse to build
@@ -74,6 +132,12 @@ function M.enable_render_markdown(buf)
     parser:invalidate(true)
     parser:parse(true)
   end
+
+  -- Fix injection regions for Neovim 0.11+ (bounding-box → per-line ranges)
+  -- and patch the parser so future re-parses (by render-markdown etc.) also
+  -- get correct regions automatically.
+  M._fix_markdown_regions(buf)
+  M._patch_parser(buf)
 
   -- Defer enable so injection trees are populated before render pass.
   vim.defer_fn(function()
