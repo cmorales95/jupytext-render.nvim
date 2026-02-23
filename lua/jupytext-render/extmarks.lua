@@ -130,42 +130,49 @@ local function segments_to_virt_text(segments, hl)
   return virt
 end
 
---- Detect column widths from a table block for proper box-drawing borders.
---- Returns a list of column widths (character counts between pipes).
----@param contents string[]  list of table row contents (after stripping "# ")
----@return integer[]|nil  column widths, or nil if not a valid table
-local function detect_table_columns(contents)
-  -- Use the separator row (or first row) to detect columns
-  for _, content in ipairs(contents) do
-    if content:match("^|") then
-      local widths = {}
-      local col = 2 -- skip leading |
-      while col <= #content do
-        local next_pipe = content:find("|", col, true)
-        if not next_pipe then break end
-        table.insert(widths, next_pipe - col)
-        col = next_pipe + 1
-      end
-      if #widths > 0 then return widths end
-    end
+--- Parse a table row into trimmed cell contents.
+---@param content string  raw table row (after stripping "# ")
+---@return string[]  list of trimmed cell texts
+local function parse_table_cells(content)
+  local row_cells = {}
+  local col = 2 -- skip leading |
+  while col <= #content do
+    local next_pipe = content:find("|", col, true)
+    if not next_pipe then break end
+    local cell = content:sub(col, next_pipe - 1)
+    -- Trim whitespace
+    cell = cell:match("^%s*(.-)%s*$") or ""
+    table.insert(row_cells, cell)
+    col = next_pipe + 1
   end
-  return nil
+  return row_cells
 end
 
---- Build a box-drawing top or bottom border from column widths.
----@param widths integer[]
+--- Compute the display width of parsed inline-md segments.
+---@param segments table[]  from parse_inline_md
+---@return integer
+local function segments_display_width(segments)
+  local w = 0
+  for _, seg in ipairs(segments) do
+    w = w + vim.fn.strdisplaywidth(seg[1])
+  end
+  return w
+end
+
+--- Build a box-drawing border from column widths (including 1-space padding each side).
+---@param col_widths integer[]  content widths per column (padding added internally)
 ---@param kind "top"|"bottom"|"sep"
 ---@return string
-local function build_table_border(widths, kind)
+local function build_table_border(col_widths, kind)
   local left   = kind == "top" and "┌" or kind == "bottom" and "└" or "├"
   local right  = kind == "top" and "┐" or kind == "bottom" and "┘" or "┤"
   local middle = kind == "top" and "┬" or kind == "bottom" and "┴" or "┼"
-  local horiz  = "─"
 
   local parts = { left }
-  for i, w in ipairs(widths) do
-    table.insert(parts, string.rep(horiz, w))
-    if i < #widths then
+  for i, w in ipairs(col_widths) do
+    -- +2 for 1 space padding on each side
+    table.insert(parts, string.rep("─", w + 2))
+    if i < #col_widths then
       table.insert(parts, middle)
     end
   end
@@ -173,43 +180,107 @@ local function build_table_border(widths, kind)
   return table.concat(parts)
 end
 
---- Build a virt_text overlay for a table data row with box-drawing pipes
---- and inline formatting in cells.
----@param content string  markdown content (after stripping "# " prefix)
+--- Render an entire table block (contiguous table lines) with aligned columns.
+--- Computes max formatted width per column, then renders every row padded
+--- to those widths with box-drawing borders.
+---@param buf integer
+---@param lines_info table[]  full lines_info array
+---@param start_idx integer  first table line index in lines_info
+---@param end_idx integer  last table line index in lines_info
 ---@param bg_hl string
----@return table[]  virt_text chunks
-local function render_table_data_row(content, bg_hl)
-  local virt = { { "  ", bg_hl } } -- prefix for "# "
-  local col = 1
-  while col <= #content do
-    local ch = content:sub(col, col)
-    if ch == "|" then
-      table.insert(virt, { "│", bg_hl })
-      col = col + 1
-    else
-      local next_pipe = content:find("|", col, true) or (#content + 1)
-      local cell_text = content:sub(col, next_pipe - 1)
-      local cell_width = vim.fn.strdisplaywidth(cell_text)
+local function render_table_block(buf, lines_info, start_idx, end_idx, bg_hl)
+  -- Parse all rows into cells and find max formatted width per column
+  local rows = {}
+  local num_cols = 0
+  for idx = start_idx, end_idx do
+    local info = lines_info[idx]
+    local is_sep = info.content:match("^|[%-:%s|]+$") ~= nil
+    local row_cells = parse_table_cells(info.content)
+    num_cols = math.max(num_cols, #row_cells)
+    table.insert(rows, { idx = idx, cells = row_cells, is_sep = is_sep })
+  end
 
-      local segments = parse_inline_md(cell_text)
-      local sv = segments_to_virt_text(segments, bg_hl)
-
-      -- Measure formatted width
-      local fmt_width = 0
-      for _, chunk in ipairs(sv) do
-        fmt_width = fmt_width + vim.fn.strdisplaywidth(chunk[1])
-        table.insert(virt, chunk)
+  -- Compute max formatted width per column (excluding separator rows)
+  local col_widths = {}
+  for i = 1, num_cols do col_widths[i] = 0 end
+  for _, row in ipairs(rows) do
+    if not row.is_sep then
+      for i, cell_text in ipairs(row.cells) do
+        local segs = parse_inline_md(cell_text)
+        local w = segments_display_width(segs)
+        if i <= num_cols then
+          col_widths[i] = math.max(col_widths[i], w)
+        end
       end
-
-      -- Pad cell to original width so pipes stay aligned with borders
-      if fmt_width < cell_width then
-        table.insert(virt, { string.rep(" ", cell_width - fmt_width), bg_hl })
-      end
-
-      col = next_pipe
     end
   end
-  return virt
+
+  -- Top border (virtual line above first row)
+  local first_lnum = lines_info[start_idx].lnum
+  vim.api.nvim_buf_set_extmark(buf, NS, first_lnum, 0, {
+    virt_lines_above = true,
+    virt_lines = { { { "  " .. build_table_border(col_widths, "top"), bg_hl } } },
+  })
+
+  -- Render each row
+  for _, row in ipairs(rows) do
+    local lnum = lines_info[row.idx].lnum
+    local orig_width = vim.fn.strdisplaywidth(lines_info[row.idx].raw)
+
+    if row.is_sep then
+      -- Separator: ├───┼───┤
+      local border = build_table_border(col_widths, "sep")
+      local virt_str = "  " .. border
+      if vim.fn.strdisplaywidth(virt_str) < orig_width then
+        virt_str = virt_str .. string.rep(" ", orig_width - vim.fn.strdisplaywidth(virt_str))
+      end
+      vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+        virt_text = { { virt_str, bg_hl } },
+        virt_text_pos = "overlay",
+      })
+    else
+      -- Data row: │ cell │ cell │
+      local virt = { { "  │", bg_hl } }
+      for i = 1, num_cols do
+        local cell_text = row.cells[i] or ""
+        local segs = parse_inline_md(cell_text)
+        local sv = segments_to_virt_text(segs, bg_hl)
+        local fmt_w = segments_display_width(segs)
+
+        -- Leading space
+        table.insert(virt, { " ", bg_hl })
+        -- Formatted content
+        for _, chunk in ipairs(sv) do
+          table.insert(virt, chunk)
+        end
+        -- Pad to column width + trailing space + pipe
+        local pad = col_widths[i] - fmt_w
+        if pad > 0 then
+          table.insert(virt, { string.rep(" ", pad), bg_hl })
+        end
+        table.insert(virt, { " │", bg_hl })
+      end
+
+      -- Pad overlay to cover original line
+      if virt_text_width(virt) < orig_width then
+        table.insert(virt, { string.rep(" ", orig_width - virt_text_width(virt)), bg_hl })
+      end
+      vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+        virt_text = virt,
+        virt_text_pos = "overlay",
+      })
+    end
+
+    vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+      line_hl_group = bg_hl,
+    })
+  end
+
+  -- Bottom border (virtual line after last row)
+  local last_lnum = lines_info[end_idx].lnum
+  vim.api.nvim_buf_set_extmark(buf, NS, last_lnum, 0, {
+    virt_lines = { { { "  " .. build_table_border(col_widths, "bottom"), bg_hl } } },
+  })
 end
 
 --- Render a markdown body line with inline formatting.
@@ -341,40 +412,44 @@ local function render_md_body(buf, cell, cfg)
     end
   end
 
-  -- Third pass: collect table blocks to compute column widths
-  -- Find contiguous runs of table lines
-  local table_blocks = {} -- { { start_idx, end_idx, col_widths } }
+  -- Third pass: find contiguous table blocks
+  local table_blocks = {}
   local i = 1
   while i <= #lines_info do
     if lines_info[i].block == "table" then
       local start_idx = i
-      local contents = {}
       while i <= #lines_info and lines_info[i].block == "table" do
-        table.insert(contents, lines_info[i].content)
         i = i + 1
       end
-      local widths = detect_table_columns(contents)
-      table.insert(table_blocks, { start_idx = start_idx, end_idx = i - 1, widths = widths })
+      table.insert(table_blocks, { start_idx = start_idx, end_idx = i - 1 })
     else
       i = i + 1
     end
   end
 
-  -- Build a lookup: line index → table block
-  local table_block_map = {}
+  -- Build a set of table line indices (to skip in the per-line pass)
+  local table_line_set = {}
   for _, tb in ipairs(table_blocks) do
     for idx = tb.start_idx, tb.end_idx do
-      table_block_map[idx] = tb
+      table_line_set[idx] = true
     end
   end
 
-  -- Fourth pass: render each line
+  -- Render table blocks (whole block at once for proper alignment)
+  for _, tb in ipairs(table_blocks) do
+    render_table_block(buf, lines_info, tb.start_idx, tb.end_idx, bg_hl)
+  end
+
+  -- Fourth pass: render non-table lines
   for idx, info in ipairs(lines_info) do
+    if table_line_set[idx] then
+      goto next_line -- already rendered by render_table_block
+    end
+
     local lnum = info.lnum
     local orig_width = vim.fn.strdisplaywidth(info.raw)
 
     if info.block == "code_fence_open" then
-      -- Opening ``` fence: render as a subtle code border
       local lang = info.code_lang or ""
       local label = lang ~= "" and ("── " .. lang .. " ") or "──── "
       local pad = string.rep("─", math.max(0, 30 - vim.fn.strdisplaywidth(label)))
@@ -391,7 +466,6 @@ local function render_md_body(buf, cell, cfg)
       })
 
     elseif info.block == "code_fence_close" then
-      -- Closing ``` fence
       local fence_text = "  " .. string.rep("─", 30)
       if vim.fn.strdisplaywidth(fence_text) < orig_width then
         fence_text = fence_text .. string.rep(" ", orig_width - vim.fn.strdisplaywidth(fence_text))
@@ -405,7 +479,6 @@ local function render_md_body(buf, cell, cfg)
       })
 
     elseif info.block == "code_block" then
-      -- Inside fenced code block: show content with code background
       local display = "  " .. (info.content or "")
       if vim.fn.strdisplaywidth(display) < orig_width then
         display = display .. string.rep(" ", orig_width - vim.fn.strdisplaywidth(display))
@@ -417,54 +490,6 @@ local function render_md_body(buf, cell, cfg)
       vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
         line_hl_group = cb_hl,
       })
-
-    elseif info.block == "table" then
-      local tb = table_block_map[idx]
-      local is_sep = info.content:match("^|[%-:%s|]+$") ~= nil
-
-      -- Add top border virtual line above first table row
-      if tb and idx == tb.start_idx and tb.widths then
-        vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
-          virt_lines_above = true,
-          virt_lines = { { { "  " .. build_table_border(tb.widths, "top"), bg_hl } } },
-        })
-      end
-
-      if is_sep then
-        -- Separator row: use box-drawing
-        if tb and tb.widths then
-          local border = build_table_border(tb.widths, "sep")
-          local virt_str = "  " .. border
-          if vim.fn.strdisplaywidth(virt_str) < orig_width then
-            virt_str = virt_str .. string.rep(" ", orig_width - vim.fn.strdisplaywidth(virt_str))
-          end
-          vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
-            virt_text = { { virt_str, bg_hl } },
-            virt_text_pos = "overlay",
-          })
-        end
-      else
-        -- Data row: replace pipes with box-drawing + inline formatting
-        local virt = render_table_data_row(info.content, bg_hl)
-        if virt_text_width(virt) < orig_width then
-          table.insert(virt, { string.rep(" ", orig_width - virt_text_width(virt)), bg_hl })
-        end
-        vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
-          virt_text = virt,
-          virt_text_pos = "overlay",
-        })
-      end
-
-      vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
-        line_hl_group = bg_hl,
-      })
-
-      -- Add bottom border virtual line after last table row
-      if tb and idx == tb.end_idx and tb.widths then
-        vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
-          virt_lines = { { { "  " .. build_table_border(tb.widths, "bottom"), bg_hl } } },
-        })
-      end
 
     elseif info.block == "text" then
       render_md_line(buf, lnum, info.content, bg_hl)
@@ -478,6 +503,8 @@ local function render_md_body(buf, cell, cfg)
         line_hl_group = bg_hl,
       })
     end
+
+    ::next_line::
   end
 end
 
