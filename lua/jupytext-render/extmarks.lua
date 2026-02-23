@@ -8,32 +8,6 @@ local function make_border_vline(text, hl)
   return { { text, hl } }
 end
 
---- Set conceallevel=2 on every window currently showing `buf`,
---- and also on the current window as a fallback.
-local function set_conceallevel(buf)
-  -- Current window (always available)
-  local cur = vim.api.nvim_get_current_win()
-  if vim.api.nvim_win_get_buf(cur) == buf then
-    vim.wo[cur].conceallevel = 2
-    vim.wo[cur].concealcursor = "nc"
-  end
-  -- All other windows showing this buffer
-  for _, win in ipairs(vim.api.nvim_list_wins()) do
-    if win ~= cur and vim.api.nvim_win_get_buf(win) == buf then
-      vim.wo[win].conceallevel = 2
-      vim.wo[win].concealcursor = "nc"
-    end
-  end
-end
-
-local function clear_conceallevel(buf)
-  for _, win in ipairs(vim.api.nvim_list_wins()) do
-    if vim.api.nvim_win_get_buf(win) == buf then
-      vim.wo[win].conceallevel = 0
-    end
-  end
-end
-
 --- Apply extmarks for all markdown cells in the buffer.
 ---@param buf integer
 ---@param cfg table  resolved config
@@ -52,14 +26,12 @@ function M.render(buf, cfg)
         virt_lines = { make_border_vline(cfg.border.top, sep_hl) },
       })
 
-      -- Conceal the marker line (# %% [markdown])
+      -- Hide the marker line (# %% [markdown]) with overlay
       if cfg.conceal_marker then
         local marker = vim.api.nvim_buf_get_lines(buf, cell.start, cell.start + 1, false)[1] or ""
         vim.api.nvim_buf_set_extmark(buf, NS, cell.start, 0, {
-          end_row  = cell.start,
-          end_col  = #marker,
-          conceal  = "",
-          hl_group = sep_hl,
+          virt_text = { { string.rep(" ", #marker), sep_hl } },
+          virt_text_pos = "overlay",
           line_hl_group = sep_hl,
         })
       end
@@ -69,22 +41,19 @@ function M.render(buf, cfg)
         local line = vim.api.nvim_buf_get_lines(buf, lnum, lnum + 1, false)[1] or ""
 
         if line:match("^# ") then
-          -- Conceal "# " Python comment prefix only (cols 0-1);
-          -- render-markdown handles heading markers, bold, tables, etc.
-          -- through the treesitter injection.
+          -- Hide "# " Python comment prefix by overlaying with spaces
           vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
-            end_row = lnum,
-            end_col = 2,
-            conceal = "",
+            virt_text = { { "  ", bg_hl } },
+            virt_text_pos = "overlay",
           })
           vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
             line_hl_group = bg_hl,
           })
         elseif line == "#" then
+          -- Hide bare "#" by overlaying with a space
           vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
-            end_row = lnum,
-            end_col = 1,
-            conceal = "",
+            virt_text = { { " ", bg_hl } },
+            virt_text_pos = "overlay",
           })
           vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
             line_hl_group = bg_hl,
@@ -104,14 +73,12 @@ function M.render(buf, cfg)
         virt_lines = { make_border_vline(cfg.border.code_top or cfg.border.bottom, sep_hl) },
       })
 
-      -- Conceal the marker line (# %%)
+      -- Hide the marker line (# %%) with overlay
       if cfg.conceal_marker then
         local marker = vim.api.nvim_buf_get_lines(buf, cell.start, cell.start + 1, false)[1] or ""
         vim.api.nvim_buf_set_extmark(buf, NS, cell.start, 0, {
-          end_row  = cell.start,
-          end_col  = #marker,
-          conceal  = "",
-          hl_group = sep_hl,
+          virt_text = { { string.rep(" ", #marker), sep_hl } },
+          virt_text_pos = "overlay",
           line_hl_group = sep_hl,
         })
       end
@@ -123,15 +90,13 @@ function M.render(buf, cfg)
     end
   end
 
-  set_conceallevel(buf)
   return #cell_list  -- return cell count for debug
 end
 
---- Clear all extmarks and restore conceallevel.
+--- Clear all extmarks.
 ---@param buf integer
 function M.clear(buf)
   vim.api.nvim_buf_clear_namespace(buf, NS, 0, -1)
-  clear_conceallevel(buf)
 end
 
 --- Return count of extmarks currently set on buf (for debug).

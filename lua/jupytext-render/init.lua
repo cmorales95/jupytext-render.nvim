@@ -54,7 +54,7 @@ local function subscribe_text_events(buf)
       end
     end,
   })
-  -- Re-apply conceallevel whenever the buffer enters a new window
+  -- Re-apply extmarks whenever the buffer enters a new window
   vim.api.nvim_create_autocmd("BufWinEnter", {
     buffer   = buf,
     group    = group,
