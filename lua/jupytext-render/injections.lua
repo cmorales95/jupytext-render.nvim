@@ -4,11 +4,15 @@ local M = {}
 -- Matches comments starting with "# " that are NOT cell markers (# %%).
 -- The #offset! strips the leading "# " (2 chars) so render-markdown sees clean
 -- markdown rather than Python comment syntax.
+--
+-- Each comment is injected as a SEPARATE markdown tree (no injection.combined).
+-- Combined mode breaks block-level parsing (headings, lists) because the
+-- column-2 offset + YAML front matter poisons the single combined document
+-- into one giant paragraph. Per-line injection preserves block structure.
 M._injection_query = [[
   ((comment) @injection.content
     (#lua-match? @injection.content "^# [^%%]")
     (#offset! @injection.content 0 2 0 0)
-    (#set! injection.combined)
     (#set! injection.language "markdown"))
 ]]
 
