@@ -74,7 +74,11 @@ function M._fix_markdown_regions(buf)
       for lnum = cell.start + 1, cell.stop do
         local line = buf_lines[lnum + 1] or "" -- buf_lines is 1-indexed
         if line:match("^# ") then
-          table.insert(ranges, { lnum, 2, lnum, #line })
+          -- Content line: strip "# " prefix, include trailing newline
+          table.insert(ranges, { lnum, 2, lnum + 1, 0 })
+        elseif line == "#" then
+          -- Blank comment = paragraph break: include only the newline
+          table.insert(ranges, { lnum, 1, lnum + 1, 0 })
         end
       end
     end
