@@ -37,6 +37,9 @@ function M._register_predicate()
       node = node[1]
       if not node then return false end
     end
+    -- Lazily ensure cache is populated — any treesitter parse pass
+    -- (including render-markdown re-parses) will have up-to-date data.
+    cells.update_cache(bufnr)
     local row = node:start()
     return cells.is_line_in_markdown_cell(bufnr, row)
   end, { force = true })
