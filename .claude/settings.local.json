@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add:*)",
+      "Bash(git push:*)",
+      "Bash(grep:*)",
+      "Bash(git commit:*)",
+      "Bash(nvim:*)",
+      "WebSearch",
+      "WebFetch(domain:neovim.io)",
+      "WebFetch(domain:github.com)",
+      "Bash(gh release:*)",
+      "Bash(git tag:*)",
+      "Bash(head:*)",
+      "Bash(gh api repos/benlubas/molten-nvim/contents/rplugin/python3/molten/options.py --jq '.content' | base64 -d 2>/dev/null)",
+      "Bash(gh search:*)",
+      "Bash(wc:*)",
+      "Bash(gh issue:*)",
+      "Bash(which wezterm 2>/dev/null && wezterm --version 2>/dev/null)"
+    ]
+  }
+}
