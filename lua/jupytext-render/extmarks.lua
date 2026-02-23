@@ -102,88 +102,107 @@ local function parse_inline_md(text)
   return segments
 end
 
---- Build overlay text for a table row, replacing | with box-drawing chars.
----@param content string  markdown content (after stripping "# " prefix)
----@param is_separator boolean  true if this is a separator row (|---|---|)
----@return string  rendered text with box-drawing characters
-local function render_table_row(content, is_separator)
-  local parts = {}
-  for i = 1, #content do
-    local ch = content:sub(i, i)
-    if ch == "|" then
-      if is_separator then
-        if i == 1 then
-          table.insert(parts, "├")
-        elseif i == #content then
-          table.insert(parts, "┤")
-        else
-          table.insert(parts, "┼")
-        end
-      else
-        if i == 1 or i == #content then
-          table.insert(parts, "┃")
-        else
-          table.insert(parts, "│")
-        end
-      end
-    elseif is_separator and (ch == "-" or ch == ":") then
-      table.insert(parts, "─")
+--- Compute the display width of a virt_text array.
+---@param virt table[]
+---@return integer
+local function virt_text_width(virt)
+  local w = 0
+  for _, chunk in ipairs(virt) do
+    w = w + vim.fn.strdisplaywidth(chunk[1])
+  end
+  return w
+end
+
+--- Build virt_text segments from parsed inline-md segments.
+---@param segments table[]  from parse_inline_md
+---@param hl string  base highlight group
+---@return table[]  virt_text chunks
+local function segments_to_virt_text(segments, hl)
+  local virt = {}
+  for _, seg in ipairs(segments) do
+    local style_hl = STYLE_HLS[seg[2]]
+    if style_hl then
+      table.insert(virt, { seg[1], { hl, style_hl } })
     else
-      table.insert(parts, ch)
+      table.insert(virt, { seg[1], hl })
     end
   end
+  return virt
+end
+
+--- Detect column widths from a table block for proper box-drawing borders.
+--- Returns a list of column widths (character counts between pipes).
+---@param contents string[]  list of table row contents (after stripping "# ")
+---@return integer[]|nil  column widths, or nil if not a valid table
+local function detect_table_columns(contents)
+  -- Use the separator row (or first row) to detect columns
+  for _, content in ipairs(contents) do
+    if content:match("^|") then
+      local widths = {}
+      local col = 2 -- skip leading |
+      while col <= #content do
+        local next_pipe = content:find("|", col, true)
+        if not next_pipe then break end
+        table.insert(widths, next_pipe - col)
+        col = next_pipe + 1
+      end
+      if #widths > 0 then return widths end
+    end
+  end
+  return nil
+end
+
+--- Build a box-drawing top or bottom border from column widths.
+---@param widths integer[]
+---@param kind "top"|"bottom"|"sep"
+---@return string
+local function build_table_border(widths, kind)
+  local left   = kind == "top" and "┌" or kind == "bottom" and "└" or "├"
+  local right  = kind == "top" and "┐" or kind == "bottom" and "┘" or "┤"
+  local middle = kind == "top" and "┬" or kind == "bottom" and "┴" or "┼"
+  local horiz  = "─"
+
+  local parts = { left }
+  for i, w in ipairs(widths) do
+    table.insert(parts, string.rep(horiz, w))
+    if i < #widths then
+      table.insert(parts, middle)
+    end
+  end
+  table.insert(parts, right)
   return table.concat(parts)
 end
 
---- Build a virt_text overlay for a table row with inline formatting in cells.
+--- Build a virt_text overlay for a table data row with box-drawing pipes
+--- and inline formatting in cells.
 ---@param content string  markdown content (after stripping "# " prefix)
----@param is_separator boolean
 ---@param bg_hl string
 ---@return table[]  virt_text chunks
-local function render_table_virt_text(content, is_separator, bg_hl)
-  if is_separator then
-    return { { "  " .. render_table_row(content, true), bg_hl } }
-  end
-
-  -- For data rows, parse each cell for inline formatting
+local function render_table_data_row(content, bg_hl)
   local virt = { { "  ", bg_hl } } -- prefix for "# "
-
-  -- Split by | and process each segment
   local col = 1
   while col <= #content do
     local ch = content:sub(col, col)
     if ch == "|" then
-      -- Outer or inner pipe
-      if col == 1 or col == #content then
-        table.insert(virt, { "┃", bg_hl })
-      else
-        table.insert(virt, { "│", bg_hl })
-      end
+      table.insert(virt, { "│", bg_hl })
       col = col + 1
     else
-      -- Collect cell content until next |
       local next_pipe = content:find("|", col, true) or (#content + 1)
       local cell_text = content:sub(col, next_pipe - 1)
-
-      -- Parse inline formatting within the cell
       local segments = parse_inline_md(cell_text)
-      for _, seg in ipairs(segments) do
-        local style_hl = STYLE_HLS[seg[2]]
-        if style_hl then
-          table.insert(virt, { seg[1], { bg_hl, style_hl } })
-        else
-          table.insert(virt, { seg[1], bg_hl })
-        end
+      local sv = segments_to_virt_text(segments, bg_hl)
+      for _, chunk in ipairs(sv) do
+        table.insert(virt, chunk)
       end
       col = next_pipe
     end
   end
-
   return virt
 end
 
 --- Render a markdown body line with inline formatting.
---- Handles headings, tables, and inline bold/italic/code via overlay extmarks.
+--- Handles headings and inline bold/italic/code via overlay extmarks.
+--- Tables and code blocks are handled at the cell level in M.render().
 ---@param buf integer
 ---@param lnum integer  0-indexed line number
 ---@param content string  markdown content (after stripping "# " prefix)
@@ -199,25 +218,15 @@ local function render_md_line(buf, lnum, content, bg_hl)
     local hl = HEADING_HLS[level]
     local icon = HEADING_ICONS[level] or ""
 
-    -- Parse inline formatting in heading text
     local segments = parse_inline_md(heading_text)
     local virt = { { icon, hl } }
-    for _, seg in ipairs(segments) do
-      local style_hl = STYLE_HLS[seg[2]]
-      if style_hl then
-        table.insert(virt, { seg[1], { hl, style_hl } })
-      else
-        table.insert(virt, { seg[1], hl })
-      end
+    for _, chunk in ipairs(segments_to_virt_text(segments, hl)) do
+      table.insert(virt, chunk)
     end
 
     -- Pad to cover original line
-    local display_width = vim.fn.strdisplaywidth(icon)
-    for _, seg in ipairs(segments) do
-      display_width = display_width + vim.fn.strdisplaywidth(seg[1])
-    end
-    if display_width < orig_width then
-      table.insert(virt, { string.rep(" ", orig_width - display_width), hl })
+    if virt_text_width(virt) < orig_width then
+      table.insert(virt, { string.rep(" ", orig_width - virt_text_width(virt)), hl })
     end
 
     vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
@@ -226,30 +235,6 @@ local function render_md_line(buf, lnum, content, bg_hl)
     })
     vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
       line_hl_group = hl,
-    })
-    return
-  end
-
-  -- Detect table row: starts with |
-  if content:match("^|") then
-    local is_sep = content:match("^|[%-:%s|]+$") ~= nil
-    local virt = render_table_virt_text(content, is_sep, bg_hl)
-
-    -- Pad to cover original line
-    local display_width = 0
-    for _, chunk in ipairs(virt) do
-      display_width = display_width + vim.fn.strdisplaywidth(chunk[1])
-    end
-    if display_width < orig_width then
-      table.insert(virt, { string.rep(" ", orig_width - display_width), bg_hl })
-    end
-
-    vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
-      virt_text = virt,
-      virt_text_pos = "overlay",
-    })
-    vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
-      line_hl_group = bg_hl,
     })
     return
   end
@@ -265,31 +250,18 @@ local function render_md_line(buf, lnum, content, bg_hl)
   end
 
   if has_formatting then
-    local virt = { { "  ", bg_hl } } -- prefix for "# "
-    for _, seg in ipairs(segments) do
-      local style_hl = STYLE_HLS[seg[2]]
-      if style_hl then
-        table.insert(virt, { seg[1], { bg_hl, style_hl } })
-      else
-        table.insert(virt, { seg[1], bg_hl })
-      end
+    local virt = { { "  ", bg_hl } }
+    for _, chunk in ipairs(segments_to_virt_text(segments, bg_hl)) do
+      table.insert(virt, chunk)
     end
-
-    -- Pad to cover original line
-    local display_width = 2 -- prefix
-    for _, seg in ipairs(segments) do
-      display_width = display_width + vim.fn.strdisplaywidth(seg[1])
+    if virt_text_width(virt) < orig_width then
+      table.insert(virt, { string.rep(" ", orig_width - virt_text_width(virt)), bg_hl })
     end
-    if display_width < orig_width then
-      table.insert(virt, { string.rep(" ", orig_width - display_width), bg_hl })
-    end
-
     vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
       virt_text = virt,
       virt_text_pos = "overlay",
     })
   else
-    -- No formatting: just overlay the "# " prefix
     vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
       virt_text = { { "  ", bg_hl } },
       virt_text_pos = "overlay",
@@ -301,6 +273,202 @@ local function render_md_line(buf, lnum, content, bg_hl)
   })
 end
 
+--- Render the body lines of a markdown cell, handling multi-line constructs
+--- (tables, fenced code blocks) that require cross-line state tracking.
+---@param buf integer
+---@param cell table  {start, stop, type}
+---@param cfg table
+local function render_md_body(buf, cell, cfg)
+  local bg_hl  = cfg.highlights.cell_bg
+  local sep_hl = cfg.highlights.sep
+  local cb_hl  = "JupytextCodeBlock"
+  local cf_hl  = "JupytextCodeFence"
+
+  -- First pass: collect line contents and classify them
+  local lines_info = {} -- { lnum, raw, content, kind }
+  for lnum = cell.start + 1, cell.stop do
+    local raw = vim.api.nvim_buf_get_lines(buf, lnum, lnum + 1, false)[1] or ""
+    local info = { lnum = lnum, raw = raw, content = nil, kind = "empty" }
+    if raw:match("^# ") then
+      info.content = raw:sub(3)
+      info.kind = "content"
+    elseif raw == "#" then
+      info.content = ""
+      info.kind = "blank"
+    end
+    table.insert(lines_info, info)
+  end
+
+  -- Second pass: identify table blocks and code fence blocks
+  -- Mark each line with its block type
+  local in_code_block = false
+  local code_lang = ""
+  for _, info in ipairs(lines_info) do
+    if info.kind == "content" then
+      if not in_code_block and info.content:match("^```") then
+        in_code_block = true
+        code_lang = info.content:match("^```(%w+)") or ""
+        info.block = "code_fence_open"
+        info.code_lang = code_lang
+      elseif in_code_block and info.content:match("^```%s*$") then
+        in_code_block = false
+        info.block = "code_fence_close"
+      elseif in_code_block then
+        info.block = "code_block"
+      elseif info.content:match("^|") then
+        info.block = "table"
+      else
+        info.block = "text"
+      end
+    elseif info.kind == "blank" then
+      if in_code_block then
+        info.block = "code_block"
+      else
+        info.block = "blank"
+      end
+    end
+  end
+
+  -- Third pass: collect table blocks to compute column widths
+  -- Find contiguous runs of table lines
+  local table_blocks = {} -- { { start_idx, end_idx, col_widths } }
+  local i = 1
+  while i <= #lines_info do
+    if lines_info[i].block == "table" then
+      local start_idx = i
+      local contents = {}
+      while i <= #lines_info and lines_info[i].block == "table" do
+        table.insert(contents, lines_info[i].content)
+        i = i + 1
+      end
+      local widths = detect_table_columns(contents)
+      table.insert(table_blocks, { start_idx = start_idx, end_idx = i - 1, widths = widths })
+    else
+      i = i + 1
+    end
+  end
+
+  -- Build a lookup: line index → table block
+  local table_block_map = {}
+  for _, tb in ipairs(table_blocks) do
+    for idx = tb.start_idx, tb.end_idx do
+      table_block_map[idx] = tb
+    end
+  end
+
+  -- Fourth pass: render each line
+  for idx, info in ipairs(lines_info) do
+    local lnum = info.lnum
+    local orig_width = vim.fn.strdisplaywidth(info.raw)
+
+    if info.block == "code_fence_open" then
+      -- Opening ``` fence: render as a subtle code border
+      local lang = info.code_lang or ""
+      local label = lang ~= "" and ("── " .. lang .. " ") or "──── "
+      local pad = string.rep("─", math.max(0, 30 - vim.fn.strdisplaywidth(label)))
+      local fence_text = "  " .. label .. pad
+      if vim.fn.strdisplaywidth(fence_text) < orig_width then
+        fence_text = fence_text .. string.rep(" ", orig_width - vim.fn.strdisplaywidth(fence_text))
+      end
+      vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+        virt_text = { { fence_text, cf_hl } },
+        virt_text_pos = "overlay",
+      })
+      vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+        line_hl_group = cf_hl,
+      })
+
+    elseif info.block == "code_fence_close" then
+      -- Closing ``` fence
+      local fence_text = "  " .. string.rep("─", 30)
+      if vim.fn.strdisplaywidth(fence_text) < orig_width then
+        fence_text = fence_text .. string.rep(" ", orig_width - vim.fn.strdisplaywidth(fence_text))
+      end
+      vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+        virt_text = { { fence_text, cf_hl } },
+        virt_text_pos = "overlay",
+      })
+      vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+        line_hl_group = cf_hl,
+      })
+
+    elseif info.block == "code_block" then
+      -- Inside fenced code block: show content with code background
+      local display = "  " .. (info.content or "")
+      if vim.fn.strdisplaywidth(display) < orig_width then
+        display = display .. string.rep(" ", orig_width - vim.fn.strdisplaywidth(display))
+      end
+      vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+        virt_text = { { display, cb_hl } },
+        virt_text_pos = "overlay",
+      })
+      vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+        line_hl_group = cb_hl,
+      })
+
+    elseif info.block == "table" then
+      local tb = table_block_map[idx]
+      local is_sep = info.content:match("^|[%-:%s|]+$") ~= nil
+
+      -- Add top border virtual line above first table row
+      if tb and idx == tb.start_idx and tb.widths then
+        vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+          virt_lines_above = true,
+          virt_lines = { { { "  " .. build_table_border(tb.widths, "top"), bg_hl } } },
+        })
+      end
+
+      if is_sep then
+        -- Separator row: use box-drawing
+        if tb and tb.widths then
+          local border = build_table_border(tb.widths, "sep")
+          local virt_str = "  " .. border
+          if vim.fn.strdisplaywidth(virt_str) < orig_width then
+            virt_str = virt_str .. string.rep(" ", orig_width - vim.fn.strdisplaywidth(virt_str))
+          end
+          vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+            virt_text = { { virt_str, bg_hl } },
+            virt_text_pos = "overlay",
+          })
+        end
+      else
+        -- Data row: replace pipes with box-drawing + inline formatting
+        local virt = render_table_data_row(info.content, bg_hl)
+        if virt_text_width(virt) < orig_width then
+          table.insert(virt, { string.rep(" ", orig_width - virt_text_width(virt)), bg_hl })
+        end
+        vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+          virt_text = virt,
+          virt_text_pos = "overlay",
+        })
+      end
+
+      vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+        line_hl_group = bg_hl,
+      })
+
+      -- Add bottom border virtual line after last table row
+      if tb and idx == tb.end_idx and tb.widths then
+        vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+          virt_lines = { { { "  " .. build_table_border(tb.widths, "bottom"), bg_hl } } },
+        })
+      end
+
+    elseif info.block == "text" then
+      render_md_line(buf, lnum, info.content, bg_hl)
+
+    elseif info.block == "blank" then
+      vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+        virt_text = { { " ", bg_hl } },
+        virt_text_pos = "overlay",
+      })
+      vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+        line_hl_group = bg_hl,
+      })
+    end
+  end
+end
+
 --- Apply extmarks for all cells in the buffer.
 ---@param buf integer
 ---@param cfg table  resolved config
@@ -308,7 +476,6 @@ function M.render(buf, cfg)
   vim.api.nvim_buf_clear_namespace(buf, NS, 0, -1)
 
   local cell_list = cells.scan(buf)
-  local bg_hl  = cfg.highlights.cell_bg
   local sep_hl = cfg.highlights.sep
 
   for _, cell in ipairs(cell_list) do
@@ -329,24 +496,8 @@ function M.render(buf, cfg)
         })
       end
 
-      -- Body lines
-      for lnum = cell.start + 1, cell.stop do
-        local line = vim.api.nvim_buf_get_lines(buf, lnum, lnum + 1, false)[1] or ""
-
-        if line:match("^# ") then
-          local content = line:sub(3) -- strip "# " prefix
-          render_md_line(buf, lnum, content, bg_hl)
-        elseif line == "#" then
-          -- Hide bare "#" by overlaying with a space
-          vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
-            virt_text = { { " ", bg_hl } },
-            virt_text_pos = "overlay",
-          })
-          vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
-            line_hl_group = bg_hl,
-          })
-        end
-      end
+      -- Body lines (tables, code blocks, inline formatting)
+      render_md_body(buf, cell, cfg)
 
       -- Bottom border virtual line after last body line
       vim.api.nvim_buf_set_extmark(buf, NS, cell.stop, 0, {
@@ -377,7 +528,7 @@ function M.render(buf, cfg)
     end
   end
 
-  return #cell_list  -- return cell count for debug
+  return #cell_list
 end
 
 --- Clear all extmarks.
