@@ -88,6 +88,16 @@ function M._fix_markdown_regions(buf)
     md:set_included_regions({ ranges })
     md:invalidate(true)
     md:parse(true)
+
+    -- The markdown_inline child has the same bounding-box issue.
+    -- Reuse the per-line ranges so the inline parser can find
+    -- bold, italic, links, etc. within the markdown content.
+    local md_inline = md:children()["markdown_inline"]
+    if md_inline then
+      md_inline:set_included_regions({ ranges })
+      md_inline:invalidate(true)
+      md_inline:parse(true)
+    end
   end
 end
 
