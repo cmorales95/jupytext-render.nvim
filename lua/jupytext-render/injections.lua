@@ -32,9 +32,14 @@ function M._register_predicate()
   vim.treesitter.query.add_predicate("is-in-markdown-cell?", function(match, _, bufnr, pred)
     local node = match[pred[2]]
     if not node then return false end
+    -- In Neovim 0.11+ match[id] returns a list of nodes, not a single TSNode
+    if type(node) == "table" then
+      node = node[1]
+      if not node then return false end
+    end
     local row = node:start()
     return cells.is_line_in_markdown_cell(bufnr, row)
-  end, { force = true })
+  end, { force = true, all = true })
 end
 
 --- Register the treesitter injection query for Python.
