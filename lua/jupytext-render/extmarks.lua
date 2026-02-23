@@ -21,8 +21,43 @@ local function make_border_vline(text, hl)
   return { { text, hl } }
 end
 
+--- Build overlay text for a table row, replacing | with box-drawing chars.
+---@param content string  markdown content (after stripping "# " prefix)
+---@param is_separator boolean  true if this is a separator row (|---|---|)
+---@return string  rendered text with box-drawing characters
+local function render_table_row(content, is_separator)
+  local parts = {}
+  for i = 1, #content do
+    local ch = content:sub(i, i)
+    if ch == "|" then
+      if is_separator then
+        if i == 1 then
+          table.insert(parts, "├")
+        elseif i == #content then
+          table.insert(parts, "┤")
+        else
+          table.insert(parts, "┼")
+        end
+      else
+        if i == 1 then
+          table.insert(parts, "┃")
+        elseif i == #content then
+          table.insert(parts, "┃")
+        else
+          table.insert(parts, "│")
+        end
+      end
+    elseif is_separator and (ch == "-" or ch == ":") then
+      table.insert(parts, "─")
+    else
+      table.insert(parts, ch)
+    end
+  end
+  return table.concat(parts)
+end
+
 --- Render a markdown body line with inline formatting.
---- Handles headings, bold, italic, and inline code via overlay extmarks.
+--- Handles headings and tables via overlay extmarks.
 ---@param buf integer
 ---@param lnum integer  0-indexed line number
 ---@param content string  markdown content (after stripping "# " prefix)
@@ -34,8 +69,6 @@ local function render_md_line(buf, lnum, content, bg_hl)
     local level = math.min(#hashes, 6)
     local hl = HEADING_HLS[level]
     local icon = HEADING_ICONS[level] or ""
-    -- Overlay "# " prefix (2 chars) + heading markers + space with icon
-    local overlay_len = 2 + #hashes + 1  -- "# " + "###" + " "
     vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
       virt_text = { { icon .. heading_text, hl } },
       virt_text_pos = "overlay",
@@ -51,6 +84,20 @@ local function render_md_line(buf, lnum, content, bg_hl)
     end
     vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
       line_hl_group = hl,
+    })
+    return
+  end
+
+  -- Detect table row: starts with |
+  if content:match("^|") then
+    local is_sep = content:match("^|[%-:%s|]+$") ~= nil
+    local rendered = render_table_row(content, is_sep)
+    vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+      virt_text = { { "  " .. rendered, bg_hl } },
+      virt_text_pos = "overlay",
+    })
+    vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+      line_hl_group = bg_hl,
     })
     return
   end
