@@ -1,5 +1,48 @@
 local M = {}
 
+-- Per-buffer cache mapping line numbers to markdown cell membership.
+-- Keyed by buffer number; each entry stores changedtick and a set of
+-- markdown body line numbers for O(1) lookup by the treesitter predicate.
+M._cache = {}
+
+--- Rebuild the line→markdown-cell cache for a buffer.
+--- Skips work if the buffer's changedtick hasn't changed.
+---@param buf integer
+function M.update_cache(buf)
+  if not vim.api.nvim_buf_is_valid(buf) then return end
+  local tick = vim.api.nvim_buf_get_changedtick(buf)
+  local entry = M._cache[buf]
+  if entry and entry.tick == tick then return end
+
+  local scanned = M.scan(buf)
+  local md_lines = {}
+  for _, cell in ipairs(scanned) do
+    if cell.type == "markdown" then
+      -- Body lines only (skip the marker line itself)
+      for lnum = cell.start + 1, cell.stop do
+        md_lines[lnum] = true
+      end
+    end
+  end
+  M._cache[buf] = { tick = tick, md_lines = md_lines }
+end
+
+--- Return true if `row` (0-indexed) is inside a markdown cell body.
+---@param buf integer
+---@param row integer  0-indexed line number
+---@return boolean
+function M.is_line_in_markdown_cell(buf, row)
+  local entry = M._cache[buf]
+  if not entry then return false end
+  return entry.md_lines[row] == true
+end
+
+--- Clear the cache for a buffer (used on BufDelete).
+---@param buf integer
+function M.clear_cache(buf)
+  M._cache[buf] = nil
+end
+
 --- Scan a buffer for jupytext-style `# %%` cell markers.
 --- Returns a list of cell ranges ordered by appearance.
 ---@param buf integer
