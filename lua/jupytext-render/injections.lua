@@ -95,6 +95,29 @@ local function fix_md_inline(md, ranges)
   md_inline:parse(true)
 end
 
+--- Clear stale markdown/render-markdown decorations from code cell lines.
+--- The bounding-box parse briefly applies markdown highlights and
+--- render-markdown extmarks to code lines; this removes them.
+---@param buf integer
+local function clear_stale_decorations(buf)
+  local code_ranges = {}
+  for _, c in ipairs(cells.scan(buf)) do
+    if c.type == "code" then
+      table.insert(code_ranges, { c.start, c.stop + 1 })
+    end
+  end
+  if #code_ranges == 0 then return end
+
+  for name, ns_id in pairs(vim.api.nvim_get_namespaces()) do
+    if (name:find("markdown", 1, true) or name:find("render", 1, true))
+       and not name:find("jupytext", 1, true) then
+      for _, range in ipairs(code_ranges) do
+        vim.api.nvim_buf_clear_namespace(buf, ns_id, range[1], range[2])
+      end
+    end
+  end
+end
+
 --- Build correct per-line included regions for the markdown child parser
 --- and its markdown_inline grandchild. Works around Neovim 0.11+ where
 --- injection.combined creates a single bounding-box region.
@@ -125,6 +148,10 @@ function M._fix_markdown_regions(buf)
     -- Fix markdown_inline grandchild regions (same bounding-box issue)
     fix_md_inline(md, ranges)
 
+    -- Clear stale markdown/render-markdown decorations from code cell
+    -- lines that were briefly included in the bounding-box parse.
+    clear_stale_decorations(buf)
+
     -- Monkey-patch the markdown parser (once per instance) so that
     -- future re-parses by render-markdown.nvim also get correct
     -- markdown_inline regions. Without this, render-markdown's own
@@ -142,6 +169,7 @@ function M._fix_markdown_regions(buf)
         if not _fixing[buf] then
           _fixing[buf] = true
           pcall(fix_md_inline, self, compute_ranges(buf))
+          pcall(clear_stale_decorations, buf)
           _fixing[buf] = nil
         end
         return result
