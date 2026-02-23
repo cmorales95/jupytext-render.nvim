@@ -32,7 +32,9 @@ local function debounced_render(buf)
     if vim.api.nvim_buf_is_valid(buf) and _state[buf] and _state[buf].enabled then
       cells.update_cache(buf)
       extmarks.render(buf, _cfg)
-      injections._fix_markdown_regions(buf)
+      if _cfg.render_markdown then
+        injections._fix_markdown_regions(buf)
+      end
     end
     if _state[buf] then _state[buf].timer = nil end
   end))
@@ -72,7 +74,9 @@ local function subscribe_text_events(buf)
       cancel_timer(buf)
       _state[buf] = nil
       cells.clear_cache(buf)
-      injections._cleanup(buf)
+      if _cfg.render_markdown then
+        injections._cleanup(buf)
+      end
       pcall(vim.api.nvim_del_augroup_by_name, "JupytextRender_buf" .. buf)
     end,
   })
@@ -87,7 +91,9 @@ local function try_attach(buf)
 
   _state[buf] = { enabled = true, timer = nil }
   extmarks.render(buf, _cfg)
-  injections.enable_render_markdown(buf)
+  if _cfg.render_markdown then
+    injections.enable_render_markdown(buf)
+  end
   subscribe_text_events(buf)
 end
 
@@ -99,7 +105,9 @@ function M.enable(buf)
   end
   _state[buf].enabled = true
   extmarks.render(buf, _cfg)
-  injections.enable_render_markdown(buf)
+  if _cfg.render_markdown then
+    injections.enable_render_markdown(buf)
+  end
 end
 
 function M.disable(buf)
@@ -107,7 +115,9 @@ function M.disable(buf)
   cancel_timer(buf)
   if _state[buf] then _state[buf].enabled = false end
   extmarks.clear(buf)
-  injections.disable_render_markdown(buf)
+  if _cfg.render_markdown then
+    injections.disable_render_markdown(buf)
+  end
 end
 
 function M.toggle(buf)
@@ -199,7 +209,9 @@ function M.setup(user_opts)
   _cfg = config.merge(user_opts)
 
   define_highlights()
-  injections.setup(_cfg)
+  if _cfg.render_markdown then
+    injections.setup(_cfg)
+  end
 
   local nk = _cfg.keymaps or {}
   if nk.toggle and nk.toggle ~= "" then

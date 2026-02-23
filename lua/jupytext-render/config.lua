@@ -1,7 +1,7 @@
 local M = {}
 
 M.defaults = {
-  render_markdown = true,
+  render_markdown = false,
   keymaps = {
     toggle    = "<leader>mM",
     next_cell = "]j",
