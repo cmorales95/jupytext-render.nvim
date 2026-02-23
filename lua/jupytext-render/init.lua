@@ -143,8 +143,7 @@ function M.debug()
 
   -- Check treesitter parsers
   local ts_py = pcall(vim.treesitter.get_parser, buf, "python")
-  local ts_md_ok, nvim_ts = pcall(require, "nvim-treesitter.parsers")
-  local ts_md = ts_md_ok and nvim_ts.has_parser("markdown")
+  local ts_md = pcall(vim.treesitter.language.inspect, "markdown")
 
   -- Check injection query
   local has_inj_query = pcall(vim.treesitter.query.get, "python", "injections")
