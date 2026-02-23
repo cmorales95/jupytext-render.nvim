@@ -147,14 +147,9 @@ function M.debug()
   local ts_md = ts_md_ok and nvim_ts.has_parser("markdown")
 
   -- Check injection query
-  local inj_query_ok, inj_query = pcall(vim.treesitter.query.get, "python", "injections")
-  local has_md_injection = false
-  if inj_query_ok and inj_query then
-    local src = inj_query:source()
-    has_md_injection = type(src) == "string" and src:find("injection.combined", 1, true) ~= nil
-  end
+  local has_inj_query = pcall(vim.treesitter.query.get, "python", "injections")
 
-  -- Check parser has markdown children
+  -- Check parser has markdown children (definitive injection check)
   local has_md_children = false
   if ts_py then
     local p_ok, p = pcall(vim.treesitter.get_parser, buf, "python")
@@ -184,8 +179,7 @@ function M.debug()
       .. (rm_ok and not rm_has_python and " ← MISSING (run :JupytextRenderDebug after reopening)" or ""),
     "ts python parser: " .. tostring(ts_py),
     "ts markdown:      " .. tostring(ts_md),
-    "inj query set:    " .. tostring(has_md_injection)
-      .. (not has_md_injection and " ← MISSING" or ""),
+    "inj query set:    " .. tostring(has_inj_query),
     "inj md children:  " .. tostring(has_md_children)
       .. (not has_md_children and " ← MISSING" or ""),
     "keymap ]j:        " .. (nj ~= "" and "set" or "NOT SET"),

@@ -17,7 +17,7 @@ Follows conventional commits (`feat:`, `fix:`, `docs:`) and semantic versioning.
 ### Rendering Pipeline
 
 1. **Detection** (`cells.lua`) — scans buffer for `# %%` markers, returns `{start, stop, type}` tuples (0-indexed)
-2. **Treesitter Injection** (`injections.lua`) — registers a treesitter query via render-markdown's `injections` API (which calls `vim.treesitter.query.set()` internally), injecting markdown language into Python comment nodes and stripping the `# ` prefix via `#offset! 0 2 0 0`. Falls back to direct `query.set()` if render-markdown is not installed.
+2. **Treesitter Injection** (`injections.lua`) — registers a treesitter query via `vim.treesitter.query.set()` directly with `;; extends` to merge with existing Python injection queries from nvim-treesitter. Injects markdown language into Python comment nodes and strips the `# ` prefix via `#offset! 0 2 0 0`. Also patches render-markdown state for consistency.
 3. **Extmarks** (`extmarks.lua`) — applies borders (virtual lines), conceals `# ` prefix and marker lines, sets background highlights per cell. All in namespace `"jupytext_render"`, cleared and rebuilt on every render pass.
 4. **render-markdown.nvim** — reads the injected markdown sub-trees and renders headings, bold, tables, etc.
 
@@ -51,7 +51,7 @@ Must be set to `2` on ALL windows showing the buffer (not just current). `BufWin
 ## Non-Obvious Details
 
 - **Molten keymaps default to `""`** (disabled) to avoid overwriting user's existing molten bindings. Opt-in only.
-- **`injections.lua` `setup()` uses render-markdown's `injections` API** to register the treesitter query (bypassing the file cache), and auto-patches `file_types` to include `"python"` if missing. Uses `vim.schedule` to run after the user's own render-markdown config. If render-markdown is absent, falls back to `vim.treesitter.query.set()` directly.
+- **`injections.lua` `setup()` uses `vim.treesitter.query.set()` directly** with `;; extends` to register the injection query, then patches render-markdown's state (`file_types`, `injections.python`) for consistency. Uses `vim.schedule` to run after the user's own render-markdown config.
 - **`queries/python/injections.scm` was removed** — the injection is now registered programmatically to avoid double-injection issues and the VeryLazy file-cache timing bug.
 - **Cell detection Lua patterns**: `^# %%%%` is the Lua literal for matching `# %%` (percent must be escaped).
 - **`extmarks.render()` clears the entire namespace first** — no incremental updates, full rebuild each pass.
