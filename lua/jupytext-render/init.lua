@@ -204,13 +204,6 @@ function M.setup(user_opts)
   define_highlights()
   injections.setup(_cfg)
 
-  -- Apply molten output split settings if enabled
-  if _cfg.molten and _cfg.molten.output_split then
-    vim.g.molten_output_win_style = "split"
-    vim.g.molten_split_direction = "right"
-    vim.g.molten_split_size = 40
-  end
-
   local nk = _cfg.keymaps or {}
   if nk.toggle and nk.toggle ~= "" then
     vim.keymap.set("n", nk.toggle, function()

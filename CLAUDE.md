@@ -53,7 +53,6 @@ Must be set to `2` on ALL windows showing the buffer (not just current). `BufWin
 - **Molten keymaps default to `""`** (disabled) to avoid overwriting user's existing molten bindings. Opt-in only.
 - **`injections.lua` `setup()` uses render-markdown's `injections` API** to register the treesitter query (bypassing the file cache), and auto-patches `file_types` to include `"python"` if missing. Uses `vim.schedule` to run after the user's own render-markdown config. If render-markdown is absent, falls back to `vim.treesitter.query.set()` directly.
 - **`queries/python/injections.scm` was removed** — the injection is now registered programmatically to avoid double-injection issues and the VeryLazy file-cache timing bug.
-- **`molten.output_split`** defaults to `false`. When enabled, sets `vim.g.molten_output_win_style = "split"`, `vim.g.molten_split_direction = "right"`, and `vim.g.molten_split_size = 40` for a right-side vsplit output layout.
 - **Cell detection Lua patterns**: `^# %%%%` is the Lua literal for matching `# %%` (percent must be escaped).
 - **`extmarks.render()` clears the entire namespace first** — no incremental updates, full rebuild each pass.
 - **`run_cell` line math**: `cell.start` is 0-indexed marker line, so first executable line = `cell.start + 2` (skip marker + convert to 1-indexed) for `MoltenEvaluateRange`.
