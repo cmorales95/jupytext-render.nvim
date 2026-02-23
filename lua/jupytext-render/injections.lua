@@ -34,7 +34,7 @@ function M._register_predicate()
     if not node then return false end
     local row = node:start()
     return cells.is_line_in_markdown_cell(bufnr, row)
-  end, { force = true, all = true })
+  end, { force = true })
 end
 
 --- Register the treesitter injection query for Python.
