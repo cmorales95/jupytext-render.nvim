@@ -41,6 +41,12 @@ function M.enable_render_markdown(buf)
   -- Defer enable so injection trees are populated before render pass.
   vim.defer_fn(function()
     if not vim.api.nvim_buf_is_valid(buf) then return end
+    -- Trigger render-markdown to attach to this buffer (it may have been
+    -- skipped if the buffer opened before "python" was added to file_types).
+    local mgr_ok, mgr = pcall(require, "render-markdown.core.manager")
+    if mgr_ok and mgr.attach then
+      pcall(mgr.attach, buf)
+    end
     pcall(vim.api.nvim_buf_call, buf, function()
       pcall(render_md.enable)
     end)
