@@ -12,6 +12,10 @@ local _state = {}
 local function define_highlights()
   vim.api.nvim_set_hl(0, "JupytextMDCell", { link = "CursorLine", default = true })
   vim.api.nvim_set_hl(0, "JupytextMDSep",  { link = "Comment",    default = true })
+  vim.api.nvim_set_hl(0, "JupytextBold",       { bold = true,                   default = true })
+  vim.api.nvim_set_hl(0, "JupytextItalic",     { italic = true,                 default = true })
+  vim.api.nvim_set_hl(0, "JupytextBoldItalic", { bold = true, italic = true,    default = true })
+  vim.api.nvim_set_hl(0, "JupytextCode",       { link = "@markup.raw.markdown_inline", default = true })
 end
 
 local function cancel_timer(buf)

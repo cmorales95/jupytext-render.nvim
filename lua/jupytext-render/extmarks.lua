@@ -16,9 +16,90 @@ local HEADING_HLS = {
 -- Heading icon prefixes per level
 local HEADING_ICONS = { "󰎤 ", "󰎧 ", "󰎪 ", "󰎭 ", "󰎱 ", "󰎳 " }
 
+-- Inline style highlight groups (defined in init.lua define_highlights)
+local STYLE_HLS = {
+  bold        = "JupytextBold",
+  italic      = "JupytextItalic",
+  bold_italic = "JupytextBoldItalic",
+  code        = "JupytextCode",
+}
+
 ---@return table[]  virt_lines entry
 local function make_border_vline(text, hl)
   return { { text, hl } }
+end
+
+--- Parse inline markdown formatting into segments.
+--- Returns a list of { text, style } where style is "normal", "bold",
+--- "italic", "bold_italic", or "code".
+---@param text string
+---@return table[]
+local function parse_inline_md(text)
+  local segments = {}
+  local pos = 1
+  local len = #text
+
+  while pos <= len do
+    local ch = text:sub(pos, pos)
+
+    -- Bold italic: ***...***
+    if text:sub(pos, pos + 2) == "***" then
+      local close = text:find("%*%*%*", pos + 3)
+      if close then
+        table.insert(segments, { text:sub(pos + 3, close - 1), "bold_italic" })
+        pos = close + 3
+        goto continue
+      end
+    end
+
+    -- Bold: **...**
+    if text:sub(pos, pos + 1) == "**" then
+      local close = text:find("%*%*", pos + 2)
+      if close then
+        table.insert(segments, { text:sub(pos + 2, close - 1), "bold" })
+        pos = close + 2
+        goto continue
+      end
+    end
+
+    -- Italic: *...* (single asterisk, not part of **)
+    if ch == "*" and text:sub(pos + 1, pos + 1) ~= "*" then
+      local close = text:find("%*", pos + 1)
+      if close and text:sub(close + 1, close + 1) ~= "*"
+         and (close == 1 or text:sub(close - 1, close - 1) ~= "*") then
+        table.insert(segments, { text:sub(pos + 1, close - 1), "italic" })
+        pos = close + 1
+        goto continue
+      end
+    end
+
+    -- Inline code: `...`
+    if ch == "`" then
+      local close = text:find("`", pos + 1, true)
+      if close then
+        table.insert(segments, { text:sub(pos + 1, close - 1), "code" })
+        pos = close + 1
+        goto continue
+      end
+    end
+
+    -- Normal text: collect until next potential marker
+    do
+      local next_special = len + 1
+      for _, p in ipairs({ "%*", "`" }) do
+        local found = text:find(p, pos + 1)
+        if found and found < next_special then
+          next_special = found
+        end
+      end
+      table.insert(segments, { text:sub(pos, next_special - 1), "normal" })
+      pos = next_special
+    end
+
+    ::continue::
+  end
+
+  return segments
 end
 
 --- Build overlay text for a table row, replacing | with box-drawing chars.
@@ -39,9 +120,7 @@ local function render_table_row(content, is_separator)
           table.insert(parts, "┼")
         end
       else
-        if i == 1 then
-          table.insert(parts, "┃")
-        elseif i == #content then
+        if i == 1 or i == #content then
           table.insert(parts, "┃")
         else
           table.insert(parts, "│")
@@ -56,32 +135,95 @@ local function render_table_row(content, is_separator)
   return table.concat(parts)
 end
 
+--- Build a virt_text overlay for a table row with inline formatting in cells.
+---@param content string  markdown content (after stripping "# " prefix)
+---@param is_separator boolean
+---@param bg_hl string
+---@return table[]  virt_text chunks
+local function render_table_virt_text(content, is_separator, bg_hl)
+  if is_separator then
+    return { { "  " .. render_table_row(content, true), bg_hl } }
+  end
+
+  -- For data rows, parse each cell for inline formatting
+  local virt = { { "  ", bg_hl } } -- prefix for "# "
+
+  -- Split by | and process each segment
+  local col = 1
+  while col <= #content do
+    local ch = content:sub(col, col)
+    if ch == "|" then
+      -- Outer or inner pipe
+      if col == 1 or col == #content then
+        table.insert(virt, { "┃", bg_hl })
+      else
+        table.insert(virt, { "│", bg_hl })
+      end
+      col = col + 1
+    else
+      -- Collect cell content until next |
+      local next_pipe = content:find("|", col, true) or (#content + 1)
+      local cell_text = content:sub(col, next_pipe - 1)
+
+      -- Parse inline formatting within the cell
+      local segments = parse_inline_md(cell_text)
+      for _, seg in ipairs(segments) do
+        local style_hl = STYLE_HLS[seg[2]]
+        if style_hl then
+          table.insert(virt, { seg[1], { bg_hl, style_hl } })
+        else
+          table.insert(virt, { seg[1], bg_hl })
+        end
+      end
+      col = next_pipe
+    end
+  end
+
+  return virt
+end
+
 --- Render a markdown body line with inline formatting.
---- Handles headings and tables via overlay extmarks.
+--- Handles headings, tables, and inline bold/italic/code via overlay extmarks.
 ---@param buf integer
 ---@param lnum integer  0-indexed line number
 ---@param content string  markdown content (after stripping "# " prefix)
 ---@param bg_hl string  background highlight group
 local function render_md_line(buf, lnum, content, bg_hl)
+  local orig_line = vim.api.nvim_buf_get_lines(buf, lnum, lnum + 1, false)[1] or ""
+  local orig_width = vim.fn.strdisplaywidth(orig_line)
+
   -- Detect heading: content starts with one or more # followed by space
   local hashes, heading_text = content:match("^(#+) (.+)")
   if hashes then
     local level = math.min(#hashes, 6)
     local hl = HEADING_HLS[level]
     local icon = HEADING_ICONS[level] or ""
+
+    -- Parse inline formatting in heading text
+    local segments = parse_inline_md(heading_text)
+    local virt = { { icon, hl } }
+    for _, seg in ipairs(segments) do
+      local style_hl = STYLE_HLS[seg[2]]
+      if style_hl then
+        table.insert(virt, { seg[1], { hl, style_hl } })
+      else
+        table.insert(virt, { seg[1], hl })
+      end
+    end
+
+    -- Pad to cover original line
+    local display_width = vim.fn.strdisplaywidth(icon)
+    for _, seg in ipairs(segments) do
+      display_width = display_width + vim.fn.strdisplaywidth(seg[1])
+    end
+    if display_width < orig_width then
+      table.insert(virt, { string.rep(" ", orig_width - display_width), hl })
+    end
+
     vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
-      virt_text = { { icon .. heading_text, hl } },
+      virt_text = virt,
       virt_text_pos = "overlay",
     })
-    -- Pad remaining characters if overlay is shorter than original line
-    local orig_len = #(vim.api.nvim_buf_get_lines(buf, lnum, lnum + 1, false)[1] or "")
-    local display_len = vim.fn.strdisplaywidth(icon .. heading_text)
-    if display_len < orig_len then
-      vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
-        virt_text = { { string.rep(" ", orig_len - display_len), bg_hl } },
-        virt_text_pos = "eol",
-      })
-    end
     vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
       line_hl_group = hl,
     })
@@ -91,9 +233,19 @@ local function render_md_line(buf, lnum, content, bg_hl)
   -- Detect table row: starts with |
   if content:match("^|") then
     local is_sep = content:match("^|[%-:%s|]+$") ~= nil
-    local rendered = render_table_row(content, is_sep)
+    local virt = render_table_virt_text(content, is_sep, bg_hl)
+
+    -- Pad to cover original line
+    local display_width = 0
+    for _, chunk in ipairs(virt) do
+      display_width = display_width + vim.fn.strdisplaywidth(chunk[1])
+    end
+    if display_width < orig_width then
+      table.insert(virt, { string.rep(" ", orig_width - display_width), bg_hl })
+    end
+
     vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
-      virt_text = { { "  " .. rendered, bg_hl } },
+      virt_text = virt,
       virt_text_pos = "overlay",
     })
     vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
@@ -102,11 +254,48 @@ local function render_md_line(buf, lnum, content, bg_hl)
     return
   end
 
-  -- Regular line: just overlay the "# " prefix
-  vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
-    virt_text = { { "  ", bg_hl } },
-    virt_text_pos = "overlay",
-  })
+  -- Regular line: parse inline formatting
+  local segments = parse_inline_md(content)
+  local has_formatting = false
+  for _, seg in ipairs(segments) do
+    if seg[2] ~= "normal" then
+      has_formatting = true
+      break
+    end
+  end
+
+  if has_formatting then
+    local virt = { { "  ", bg_hl } } -- prefix for "# "
+    for _, seg in ipairs(segments) do
+      local style_hl = STYLE_HLS[seg[2]]
+      if style_hl then
+        table.insert(virt, { seg[1], { bg_hl, style_hl } })
+      else
+        table.insert(virt, { seg[1], bg_hl })
+      end
+    end
+
+    -- Pad to cover original line
+    local display_width = 2 -- prefix
+    for _, seg in ipairs(segments) do
+      display_width = display_width + vim.fn.strdisplaywidth(seg[1])
+    end
+    if display_width < orig_width then
+      table.insert(virt, { string.rep(" ", orig_width - display_width), bg_hl })
+    end
+
+    vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+      virt_text = virt,
+      virt_text_pos = "overlay",
+    })
+  else
+    -- No formatting: just overlay the "# " prefix
+    vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+      virt_text = { { "  ", bg_hl } },
+      virt_text_pos = "overlay",
+    })
+  end
+
   vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
     line_hl_group = bg_hl,
   })
