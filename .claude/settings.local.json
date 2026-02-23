@@ -16,7 +16,9 @@
       "Bash(gh search:*)",
       "Bash(wc:*)",
       "Bash(gh issue:*)",
-      "Bash(which wezterm 2>/dev/null && wezterm --version 2>/dev/null)"
+      "Bash(which wezterm 2>/dev/null && wezterm --version 2>/dev/null)",
+      "Bash(git checkout:*)",
+      "Bash(gh pr:*)"
     ]
   }
 }
