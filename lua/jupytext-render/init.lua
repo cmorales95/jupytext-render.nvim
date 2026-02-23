@@ -30,6 +30,7 @@ local function debounced_render(buf)
   _state[buf].timer = timer
   timer:start(_cfg.debounce_ms, 0, vim.schedule_wrap(function()
     if vim.api.nvim_buf_is_valid(buf) and _state[buf] and _state[buf].enabled then
+      cells.update_cache(buf)
       extmarks.render(buf, _cfg)
     end
     if _state[buf] then _state[buf].timer = nil end
@@ -69,6 +70,7 @@ local function subscribe_text_events(buf)
     callback = function()
       cancel_timer(buf)
       _state[buf] = nil
+      cells.clear_cache(buf)
       pcall(vim.api.nvim_del_augroup_by_name, "JupytextRender_buf" .. buf)
     end,
   })

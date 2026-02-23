@@ -1,25 +1,47 @@
 local M = {}
 
+local cells = require("jupytext-render.cells")
+
 -- The treesitter injection query that turns Python comment lines into markdown.
--- Matches comments starting with "# " that are NOT cell markers (# %%).
--- The #offset! strips the leading "# " (2 chars) so render-markdown sees clean
--- markdown rather than Python comment syntax.
+-- Uses injection.combined so multi-line constructs (tables, code blocks, bold)
+-- are parsed as a single markdown document instead of separate per-line trees.
 --
--- Each comment is injected as a SEPARATE markdown tree (no injection.combined).
--- Combined mode breaks block-level parsing (headings, lists) because the
--- column-2 offset + YAML front matter poisons the single combined document
--- into one giant paragraph. Per-line injection preserves block structure.
+-- The custom predicate #is-in-markdown-cell? restricts injection to lines
+-- inside markdown cells only, excluding YAML frontmatter and code cell comments
+-- that would otherwise poison the combined document.
+--
+-- The #lua-match? "^# " excludes bare "#" lines (blank comment lines), which
+-- act as paragraph breaks / gaps in the combined document.
 M._injection_query = [[
   ((comment) @injection.content
-    (#lua-match? @injection.content "^# [^%%]")
+    (#is-in-markdown-cell? @injection.content)
+    (#lua-match? @injection.content "^# ")
     (#offset! @injection.content 0 2 0 0)
+    (#set! injection.combined)
     (#set! injection.language "markdown"))
 ]]
+
+local _predicate_registered = false
+
+--- Register the custom treesitter predicate `is-in-markdown-cell?`.
+--- Only registers once; safe to call multiple times.
+function M._register_predicate()
+  if _predicate_registered then return end
+  _predicate_registered = true
+
+  vim.treesitter.query.add_predicate("is-in-markdown-cell?", function(match, _, bufnr, pred)
+    local node = match[pred[2]]
+    if not node then return false end
+    local row = node:start()
+    return cells.is_line_in_markdown_cell(bufnr, row)
+  end, { force = true, all = true })
+end
 
 --- Register the treesitter injection query for Python.
 --- Uses ;; extends to merge with existing Python injection queries
 --- from nvim-treesitter. Safe to call multiple times.
 function M._register_injection()
+  M._register_predicate()
   pcall(vim.treesitter.query.set, "python", "injections",
     ";; extends\n" .. M._injection_query)
 end
@@ -34,6 +56,9 @@ function M.enable_render_markdown(buf)
   if not ok then return end
 
   M._register_injection()
+
+  -- Refresh cell cache so the predicate has up-to-date line mappings.
+  cells.update_cache(buf)
 
   -- Force full re-parse to build injection sub-trees.
   local ts_ok, parser = pcall(vim.treesitter.get_parser, buf, "python")
