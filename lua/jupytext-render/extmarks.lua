@@ -24,9 +24,112 @@ local STYLE_HLS = {
   code        = "JupytextCode",
 }
 
+-- Common language aliases for treesitter parser names
+local LANG_MAP = {
+  py = "python", js = "javascript", ts = "typescript",
+  rb = "ruby", rs = "rust", sh = "bash", zsh = "bash",
+  yml = "yaml", md = "markdown", tf = "hcl",
+}
+
 ---@return table[]  virt_lines entry
 local function make_border_vline(text, hl)
   return { { text, hl } }
+end
+
+--- Use treesitter to get syntax highlights for a code block.
+--- Returns a table keyed by 1-indexed line number, each value a list of
+--- { start_col, end_col, hl } ranges sorted by start_col.
+---@param code_lines string[]  lines of code (no "# " prefix)
+---@param lang string  language name from the ``` fence
+---@return table<integer, table[]>|nil  per-line highlights, or nil
+local function get_code_highlights(code_lines, lang)
+  lang = LANG_MAP[lang] or lang
+  if lang == "" then return nil end
+
+  -- Check if treesitter parser is available
+  if not pcall(vim.treesitter.language.inspect, lang) then return nil end
+
+  local code = table.concat(code_lines, "\n")
+  local ok, parser = pcall(vim.treesitter.get_string_parser, code, lang)
+  if not ok or not parser then return nil end
+
+  parser:parse(true)
+  local trees = parser:trees()
+  if not trees or #trees == 0 then return nil end
+
+  local q_ok, query = pcall(vim.treesitter.query.get, lang, "highlights")
+  if not q_ok or not query then return nil end
+
+  local num_lines = #code_lines
+  local line_hl = {}
+  for i = 1, num_lines do line_hl[i] = {} end
+
+  for id, node in query:iter_captures(trees[1]:root(), code, 0, num_lines) do
+    local name = query.captures[id]
+    local hl = "@" .. name .. "." .. lang
+    local sr, sc, er, ec = node:range()
+
+    if sr == er then
+      if sr + 1 <= num_lines then
+        table.insert(line_hl[sr + 1], { start_col = sc, end_col = ec, hl = hl })
+      end
+    else
+      if sr + 1 <= num_lines then
+        table.insert(line_hl[sr + 1], { start_col = sc, end_col = #code_lines[sr + 1], hl = hl })
+      end
+      for r = sr + 1, er - 1 do
+        if r + 1 <= num_lines then
+          table.insert(line_hl[r + 1], { start_col = 0, end_col = #code_lines[r + 1], hl = hl })
+        end
+      end
+      if er + 1 <= num_lines then
+        table.insert(line_hl[er + 1], { start_col = 0, end_col = ec, hl = hl })
+      end
+    end
+  end
+
+  return line_hl
+end
+
+--- Build a highlighted virt_text overlay for a single code block line.
+--- Uses a character-level highlight map (last capture wins) to produce
+--- minimal segments with proper syntax colors.
+---@param line_text string  the code content
+---@param highlights table[]|nil  list of {start_col, end_col, hl}
+---@param cb_hl string  code block background highlight
+---@return table[]  virt_text chunks
+local function build_highlighted_code_line(line_text, highlights, cb_hl)
+  if not highlights or #highlights == 0 or #line_text == 0 then
+    return { { "  " .. line_text, cb_hl } }
+  end
+
+  -- Build character-level highlight map (last capture wins)
+  local char_hl = {}
+  for _, h in ipairs(highlights) do
+    for ci = h.start_col + 1, math.min(h.end_col, #line_text) do
+      char_hl[ci] = h.hl
+    end
+  end
+
+  -- Convert to segments
+  local virt = { { "  ", cb_hl } } -- prefix for "# "
+  local ci = 1
+  while ci <= #line_text do
+    local cur = char_hl[ci]
+    local cj = ci
+    while cj <= #line_text and char_hl[cj] == cur do
+      cj = cj + 1
+    end
+    local text = line_text:sub(ci, cj - 1)
+    if cur then
+      table.insert(virt, { text, { cb_hl, cur } })
+    else
+      table.insert(virt, { text, cb_hl })
+    end
+    ci = cj
+  end
+
+  return virt
 end
 
 --- Parse inline markdown formatting into segments.
@@ -412,6 +515,32 @@ local function render_md_body(buf, cell, cfg)
     end
   end
 
+  -- Collect fenced code blocks and compute syntax highlights
+  do
+    local cb_start_idx = nil
+    local cb_lang = ""
+    for idx, info in ipairs(lines_info) do
+      if info.block == "code_fence_open" then
+        cb_start_idx = idx
+        cb_lang = info.code_lang or ""
+      elseif info.block == "code_fence_close" and cb_start_idx then
+        local code_lines = {}
+        for j = cb_start_idx + 1, idx - 1 do
+          table.insert(code_lines, lines_info[j].content or "")
+        end
+        if #code_lines > 0 and cb_lang ~= "" then
+          local hl = get_code_highlights(code_lines, cb_lang)
+          if hl then
+            for j = cb_start_idx + 1, idx - 1 do
+              lines_info[j].code_hl = hl[j - cb_start_idx]
+            end
+          end
+        end
+        cb_start_idx = nil
+      end
+    end
+  end
+
   -- Third pass: find contiguous table blocks
   local table_blocks = {}
   local i = 1
@@ -479,12 +608,13 @@ local function render_md_body(buf, cell, cfg)
       })
 
     elseif info.block == "code_block" then
-      local display = "  " .. (info.content or "")
-      if vim.fn.strdisplaywidth(display) < orig_width then
-        display = display .. string.rep(" ", orig_width - vim.fn.strdisplaywidth(display))
+      local content = info.content or ""
+      local virt = build_highlighted_code_line(content, info.code_hl, cb_hl)
+      if virt_text_width(virt) < orig_width then
+        table.insert(virt, { string.rep(" ", orig_width - virt_text_width(virt)), cb_hl })
       end
       vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
-        virt_text = { { display, cb_hl } },
+        virt_text = virt,
         virt_text_pos = "overlay",
       })
       vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
