@@ -3,12 +3,69 @@ local cells = require("jupytext-render.cells")
 
 local NS = vim.api.nvim_create_namespace("jupytext_render")
 
+-- Heading highlight groups (linked to treesitter markdown highlights)
+local HEADING_HLS = {
+  "@markup.heading.1.markdown",
+  "@markup.heading.2.markdown",
+  "@markup.heading.3.markdown",
+  "@markup.heading.4.markdown",
+  "@markup.heading.5.markdown",
+  "@markup.heading.6.markdown",
+}
+
+-- Heading icon prefixes per level
+local HEADING_ICONS = { "󰎤 ", "󰎧 ", "󰎪 ", "󰎭 ", "󰎱 ", "󰎳 " }
+
 ---@return table[]  virt_lines entry
 local function make_border_vline(text, hl)
   return { { text, hl } }
 end
 
---- Apply extmarks for all markdown cells in the buffer.
+--- Render a markdown body line with inline formatting.
+--- Handles headings, bold, italic, and inline code via overlay extmarks.
+---@param buf integer
+---@param lnum integer  0-indexed line number
+---@param content string  markdown content (after stripping "# " prefix)
+---@param bg_hl string  background highlight group
+local function render_md_line(buf, lnum, content, bg_hl)
+  -- Detect heading: content starts with one or more # followed by space
+  local hashes, heading_text = content:match("^(#+) (.+)")
+  if hashes then
+    local level = math.min(#hashes, 6)
+    local hl = HEADING_HLS[level]
+    local icon = HEADING_ICONS[level] or ""
+    -- Overlay "# " prefix (2 chars) + heading markers + space with icon
+    local overlay_len = 2 + #hashes + 1  -- "# " + "###" + " "
+    vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+      virt_text = { { icon .. heading_text, hl } },
+      virt_text_pos = "overlay",
+    })
+    -- Pad remaining characters if overlay is shorter than original line
+    local orig_len = #(vim.api.nvim_buf_get_lines(buf, lnum, lnum + 1, false)[1] or "")
+    local display_len = vim.fn.strdisplaywidth(icon .. heading_text)
+    if display_len < orig_len then
+      vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+        virt_text = { { string.rep(" ", orig_len - display_len), bg_hl } },
+        virt_text_pos = "eol",
+      })
+    end
+    vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+      line_hl_group = hl,
+    })
+    return
+  end
+
+  -- Regular line: just overlay the "# " prefix
+  vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+    virt_text = { { "  ", bg_hl } },
+    virt_text_pos = "overlay",
+  })
+  vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
+    line_hl_group = bg_hl,
+  })
+end
+
+--- Apply extmarks for all cells in the buffer.
 ---@param buf integer
 ---@param cfg table  resolved config
 function M.render(buf, cfg)
@@ -41,14 +98,8 @@ function M.render(buf, cfg)
         local line = vim.api.nvim_buf_get_lines(buf, lnum, lnum + 1, false)[1] or ""
 
         if line:match("^# ") then
-          -- Hide "# " Python comment prefix by overlaying with spaces
-          vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
-            virt_text = { { "  ", bg_hl } },
-            virt_text_pos = "overlay",
-          })
-          vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
-            line_hl_group = bg_hl,
-          })
+          local content = line:sub(3) -- strip "# " prefix
+          render_md_line(buf, lnum, content, bg_hl)
         elseif line == "#" then
           -- Hide bare "#" by overlaying with a space
           vim.api.nvim_buf_set_extmark(buf, NS, lnum, 0, {
